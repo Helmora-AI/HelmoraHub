@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo/helmora_full_black.svg" alt="Helmora" width="420" />
+  <img src="public/logo/helmoraai-readme.svg" alt="Helmora AI" width="560" />
 </p>
 
 <h1 align="center">Helmora Hub</h1>
@@ -110,6 +110,7 @@ ENCRYPTION_KEY=…
 
 | File | Use |
 |------|-----|
+| [`public/logo/helmoraai-readme.svg`](public/logo/helmoraai-readme.svg) | README / GitHub hero |
 | [`public/logo/helmora_full_black.svg`](public/logo/helmora_full_black.svg) | Full lockup (light) |
 | [`public/logo/helmora_full_white.svg`](public/logo/helmora_full_white.svg) | Full lockup (dark) |
 | [`public/logo/helmora_logo_black.svg`](public/logo/helmora_logo_black.svg) | Icon mark |
