@@ -1,6 +1,14 @@
 -- Helmora Hub hybrid storage schema for Supabase (Postgres)
--- Run in Supabase SQL editor before STORAGE_BACKEND=supabase
--- Existing ctrlhub_* installs: run sql/rename-ctrlhub-to-helmora.sql first
+-- SOURCE OF TRUTH for control-plane tables (settings, providers, agents, OAuth).
+--
+-- Apply BEFORE switching Settings → SQL (Supabase):
+--   1. Supabase Dashboard → SQL Editor → New query
+--   2. Paste this entire file and Run
+--   3. Helmora Settings → SQL → Test connection → Apply
+--
+-- Also available via GET /api/settings/storage/schema (admin).
+-- Existing ctrlhub_* installs: run sql/rename-ctrlhub-to-helmora.sql first.
+-- See sql/migrations/README.md (no \i — Supabase SQL Editor does not support it).
 
 create table if not exists public.helmora_settings (
   key text primary key,

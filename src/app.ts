@@ -110,14 +110,15 @@ export function createApp(_config: Config) {
         pricing: 'GET|PUT /api/pricing (admin)',
         usage: 'GET /api/usage (admin)',
         storageApi: 'GET|PUT /api/settings/storage (admin)',
+        storageSchema: 'GET /api/settings/storage/schema (admin) — SQL DDL for Supabase',
         tunnelApi: 'GET|PUT /api/settings/tunnel (admin)',
         health: 'GET /health',
         state: 'GET /state',
         registry: 'GET /registry',
-        chat: 'POST /v1/chat/completions · POST /v1/embeddings (hel_* / ctrl_*) · POST /api/chat/completions (SPA session)',
+        chat: 'POST /v1/chat/completions · POST /v1/embeddings (hel_* / ctrl_*) · POST /api/chat/completions (SPA session; history is browser-local)',
         models: 'GET /v1/models · GET /api/models (admin)',
         admin: 'GET /api/status (admin)',
-        schema: 'sql/supabase-schema.sql',
+        schema: 'sql/supabase-schema.sql (apply in Supabase SQL Editor before SQL mode)',
       },
     });
   });

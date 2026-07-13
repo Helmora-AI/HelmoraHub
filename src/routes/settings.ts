@@ -11,6 +11,14 @@ import {
   type RuntimeConfigFile,
   type StorageChoice,
 } from '../lib/runtime-config.js';
+import {
+  formatSupabaseControlError,
+  isSupabaseMissingTableError,
+  readSupabaseSchemaSql,
+  supabaseSchemaApiHints,
+  SUPABASE_SCHEMA_APPLY_HINT,
+  SUPABASE_SCHEMA_REL_PATH,
+} from '../lib/supabase-schema.js';
 import { getControlHealth, getStorage, reinitStorage } from '../storage/index.js';
 import { maskSecret } from '../lib/crypto.js';
 import { getTunnelStatus, stopTunnel } from '../tunnel/manager.js';
@@ -23,29 +31,31 @@ import {
 
 export const settingsRouter = Router();
 
+const LOCAL_OPTION = {
+  id: 'local' as const,
+  label: 'Local',
+  description: 'SQLite on this machine (default). Best for local / Docker.',
+};
+
+const SQL_OPTION = {
+  id: 'sql' as const,
+  label: 'SQL (Supabase)',
+  description:
+    'Hybrid control plane: providers/agents/keys settings on Supabase; vault + usage workspace on local SQLite. Playground chat stays in the browser (not Hub/Supabase).',
+};
+
 /** Aggregated settings for SPA (tunnel read-only). */
 settingsRouter.get('/', (_req, res) => {
   const config = getActiveConfig();
   const runtime = readRuntimeConfig(config.dataDir);
   const storage = getStorage();
   const form = maskRuntimeConfig(runtime);
+  const schema = supabaseSchemaApiHints();
 
   res.json({
     storage: {
       choice: config.storageChoice,
-      options: [
-        {
-          id: 'local',
-          label: 'Local',
-          description: 'SQLite on this machine (default). Best for local / Docker.',
-        },
-        {
-          id: 'sql',
-          label: 'SQL (Supabase)',
-          description:
-            'Hybrid: control on Supabase, vault/workspace on local SQLite. Provider keys encrypted at rest.',
-        },
-      ],
+      options: [LOCAL_OPTION, SQL_OPTION],
       form: {
         supabaseUrl: form.supabaseUrl,
         supabaseServiceRoleConfigured: Boolean(runtime.supabaseServiceRoleKey),
@@ -61,9 +71,10 @@ settingsRouter.get('/', (_req, res) => {
         rateBackend: storage.rate.backend,
         control: getControlHealth(),
       },
+      schema,
       migration: {
         supported: false,
-        note: 'Phase A: changing storage applies on reinit/restart; no automatic data migration.',
+        note: 'Phase A: changing storage applies on reinit/restart; no automatic data migration. SQL mode requires applying sql/supabase-schema.sql in Supabase first.',
       },
     },
     tunnel: tunnelPublicPayload(getTunnelStatus()),
@@ -75,21 +86,10 @@ settingsRouter.get('/storage', (_req, res) => {
   const runtime = readRuntimeConfig(config.dataDir);
   const storage = getStorage();
   const control = getControlHealth();
+  const schema = supabaseSchemaApiHints();
 
   res.json({
-    options: [
-      {
-        id: 'local',
-        label: 'Local',
-        description: 'SQLite on this machine (default). Best for local / Docker.',
-      },
-      {
-        id: 'sql',
-        label: 'SQL (Supabase)',
-        description:
-          'Hybrid: control on Supabase, vault/workspace on local SQLite. Provider keys encrypted at rest.',
-      },
-    ],
+    options: [LOCAL_OPTION, SQL_OPTION],
     current: {
       choice: config.storageChoice,
       backend: storage.config.backend,
@@ -99,7 +99,28 @@ settingsRouter.get('/storage', (_req, res) => {
     control,
     form: maskRuntimeConfig(runtime),
     defaults: { choice: 'local' },
+    schema,
   });
+});
+
+/** Return control-plane DDL for copy/paste into Supabase SQL Editor (admin). */
+settingsRouter.get('/storage/schema', (_req, res) => {
+  try {
+    const { sql, path: resolvedPath } = readSupabaseSchemaSql();
+    res.json({
+      path: SUPABASE_SCHEMA_REL_PATH,
+      resolvedPath,
+      applyHint: SUPABASE_SCHEMA_APPLY_HINT,
+      sql,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        message: err instanceof Error ? err.message : String(err),
+        type: 'schema_unavailable',
+      },
+    });
+  }
 });
 
 settingsRouter.put('/storage', async (req, res, next) => {
@@ -158,7 +179,7 @@ settingsRouter.put('/storage', async (req, res, next) => {
         res.status(400).json({
           error: {
             message:
-              'SQL (Supabase) requires Supabase URL and Service Role Key. Run sql/supabase-schema.sql first.',
+              'SQL (Supabase) requires Supabase URL and Service Role Key. Also apply sql/supabase-schema.sql in the SQL Editor before Test/Apply.',
             type: 'validation_error',
           },
         });
@@ -195,12 +216,16 @@ settingsRouter.put('/storage', async (req, res, next) => {
         );
         const probe = await client.from(HEL_TABLE.settings).select('key').limit(1);
         if (probe.error) {
+          const enriched = formatSupabaseControlError('probe', probe.error.message);
+          const schemaMissing = isSupabaseMissingTableError(probe.error.message);
           res.status(400).json({
             ok: false,
             tested: false,
+            schemaMissing,
+            schema: supabaseSchemaApiHints(),
             error: {
-              message: `Supabase probe failed: ${probe.error.message}`,
-              type: 'connection_failed',
+              message: enriched.message,
+              type: schemaMissing ? 'schema_missing' : 'connection_failed',
             },
           });
           return;
@@ -211,12 +236,16 @@ settingsRouter.put('/storage', async (req, res, next) => {
           message: `Supabase connection OK (${HEL_TABLE.settings} reachable).`,
         });
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const schemaMissing = isSupabaseMissingTableError(message);
         res.status(400).json({
           ok: false,
           tested: false,
+          schemaMissing,
+          schema: supabaseSchemaApiHints(),
           error: {
-            message: err instanceof Error ? err.message : String(err),
-            type: 'connection_failed',
+            message,
+            type: schemaMissing ? 'schema_missing' : 'connection_failed',
           },
         });
       }

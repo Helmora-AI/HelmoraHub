@@ -168,6 +168,25 @@ describe('Admin API + hybrid storage', () => {
     expect(res.body.defaults.choice).toBe('local');
     expect(res.body.current.choice).toBe('local');
     expect(res.body.options.map((o: { id: string }) => o.id)).toEqual(['local', 'sql']);
+    expect(res.body.schema.path).toBe('sql/supabase-schema.sql');
+    expect(res.body.schema.endpoint).toBe('/api/settings/storage/schema');
+  });
+
+  it('GET /api/settings/storage/schema returns DDL', async () => {
+    const res = await request(app)
+      .get('/api/settings/storage/schema')
+      .set('X-Admin-Token', adminToken);
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe('sql/supabase-schema.sql');
+    expect(res.body.sql).toContain('create table if not exists public.helmora_settings');
+    expect(res.body.applyHint).toMatch(/SQL Editor/i);
+  });
+
+  it('GET /api/settings includes schema apply hints', async () => {
+    const res = await request(app).get('/api/settings').set('X-Admin-Token', adminToken);
+    expect(res.status).toBe(200);
+    expect(res.body.storage.schema.path).toBe('sql/supabase-schema.sql');
+    expect(res.body.storage.migration.note).toMatch(/supabase-schema\.sql/i);
   });
 
   it('PUT /api/settings/storage keeps local', async () => {

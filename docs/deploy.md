@@ -29,7 +29,7 @@ Recommended production shape:
 | Control (light) | **Supabase** Postgres — providers, API keys, agents, small settings |
 | Vault + workspace (heavy) | **Local SQLite** under `DATA_DIR` on the Hub host |
 
-When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the control-plane primary; a control **vault** mirror and all heavy workspace data (usage, models catalog growth, future chat) stay on local SQLite.
+When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the control-plane primary; a control **vault** mirror and all heavy workspace data (usage, models catalog growth) stay on local SQLite. Playground chat history is browser `localStorage` only (not Hub, not Supabase).
 
 ### Outage and recovery
 
@@ -39,11 +39,17 @@ When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the con
 
 `/v1` keeps working during outages (auth against vault). Control mutations during reconcile may briefly wait.
 
-### Schema
+### Schema (required before SQL mode)
 
-1. Apply [`sql/supabase-schema.sql`](../sql/supabase-schema.sql) in the Supabase SQL editor (control tables).
-2. If you still have legacy `ctrlhub_*` table names, run [`sql/rename-ctrlhub-to-helmora.sql`](../sql/rename-ctrlhub-to-helmora.sql) once.
-3. Persist `DATA_DIR` on the Hub host (Ptero volume / Docker volume) — vault + outbox + workspace live there.
+1. Open **Supabase Dashboard → SQL Editor → New query**.
+2. Paste and run the full contents of [`sql/supabase-schema.sql`](../sql/supabase-schema.sql) (source of truth; see also [`sql/migrations/README.md`](../sql/migrations/README.md)).
+3. If you still have legacy `ctrlhub_*` table names, run [`sql/rename-ctrlhub-to-helmora.sql`](../sql/rename-ctrlhub-to-helmora.sql) once.
+4. In Helmora Settings choose **SQL (Supabase)**, enter URL + service role key + encryption key, **Test connection**, then **Apply**.
+5. Persist `DATA_DIR` on the Hub host (Ptero volume / Docker volume) — vault + outbox + workspace live there.
+
+Admin helper: `GET /api/settings/storage/schema` returns the SQL text for copy/paste.
+
+**Not stored in Supabase:** Playground chat history (browser `localStorage` only) and heavy workspace data (usage, model catalog growth) stay on Hub local SQLite.
 
 Health fields (no secrets): `GET /api/status` → `control: { controlPlane, vault, outboxPending }`.
 
@@ -234,7 +240,7 @@ Startup: `bash scripts/ptero-startup.sh` (Linux custom command; fallback `node s
 
 - Allocation URL → `http://<node-ip>:<port>/settings`
 - Choose **Local** (SQLite) or **SQL (Supabase)**
-- Apply `sql/supabase-schema.sql` before switching to SQL (existing `ctrlhub_*` tables: run `sql/rename-ctrlhub-to-helmora.sql`)
+- **Before SQL:** paste/run `sql/supabase-schema.sql` in Supabase SQL Editor, then Test Connection (existing `ctrlhub_*` tables: run `sql/rename-ctrlhub-to-helmora.sql`)
 
 ---
 

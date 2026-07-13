@@ -3,6 +3,7 @@ import type { Config } from '../lib/config.js';
 import { HEL_TABLE } from '../lib/hel-env.js';
 import { generateApiKey, randomId } from '../lib/auth.js';
 import { decryptSecret, encryptSecret } from '../lib/crypto.js';
+import { formatSupabaseControlError } from '../lib/supabase-schema.js';
 import {
   apiKeyHint,
   generateClientApiKey,
@@ -138,7 +139,7 @@ export class SupabaseConfigStore implements ConfigStore {
     const { data: existingProviders, error: listErr } = await this.client
       .from(HEL_TABLE.providers)
       .select('*');
-    if (listErr) throw new Error(`Supabase providers list failed: ${listErr.message}`);
+    if (listErr) throw formatSupabaseControlError('bootstrap (providers)', listErr.message);
 
     const existingById = new Map(
       (existingProviders ?? []).map((r) => [r.id as string, r as Record<string, unknown>])
@@ -247,7 +248,7 @@ export class SupabaseConfigStore implements ConfigStore {
     const { data: existingAgents, error: agentsErr } = await this.client
       .from(HEL_TABLE.agents)
       .select('id');
-    if (agentsErr) throw new Error(`Supabase agents list failed: ${agentsErr.message}`);
+    if (agentsErr) throw formatSupabaseControlError('bootstrap (agents)', agentsErr.message);
     const agentIds = new Set((existingAgents ?? []).map((r) => r.id as string));
 
     for (const agent of DEFAULT_AGENTS) {
@@ -427,7 +428,7 @@ export class SupabaseConfigStore implements ConfigStore {
       .select('value')
       .eq('key', key)
       .maybeSingle();
-    if (error) throw new Error(`Supabase getSetting: ${error.message}`);
+    if (error) throw formatSupabaseControlError('getSetting', error.message);
     return (data as SettingsRow | null)?.value ?? null;
   }
 
@@ -437,7 +438,7 @@ export class SupabaseConfigStore implements ConfigStore {
       value,
       updated_at: new Date().toISOString(),
     });
-    if (error) throw new Error(`Supabase setSetting: ${error.message}`);
+    if (error) throw formatSupabaseControlError('setSetting', error.message);
   }
 
   async getActiveMode(): Promise<HubMode> {
