@@ -22,3 +22,15 @@ bash scripts/ptero-startup.sh
 | `GIT_BRANCH` | dùng trong script sau khi đã có tree — clone lần đầu dùng default branch |
 
 Tunnel / Hub: `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_TUNNEL_AUTO_START=1`, `ENCRYPTION_KEY`, `DATA_DIR=/home/container/data`, `HELMORA_PUBLIC=1`.
+
+## better-sqlite3 / npm 12
+
+Ptero Node eggs often ship **npm 12**, which blocks install scripts by default → missing `better_sqlite3.node` at runtime.
+
+Hub commits in `package.json`:
+
+```json
+"allowScripts": { "better-sqlite3": true }
+```
+
+Startup verifies the `.node` binding and rebuilds if missing. After pull: delete `node_modules` in File Manager once, then Start again.

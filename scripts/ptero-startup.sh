@@ -67,15 +67,40 @@ else
   NODE=node
 fi
 
-# Ptero Node yolks / npm 10+ may block native install scripts (better-sqlite3).
+# npm 12 blocks dependency install scripts unless allowScripts (better-sqlite3 needs native build).
 export npm_config_ignore_scripts=false
-$NPM config set ignore-scripts false >/dev/null 2>&1 || true
-$NPM install --foreground-scripts
-# Ensure native addon built even if a prior install skipped scripts
-if [[ ! -d node_modules/better-sqlite3/build ]] && [[ ! -f node_modules/better-sqlite3/build/Release/better_sqlite3.node ]]; then
-  log "rebuilding better-sqlite3…"
-  $NPM rebuild better-sqlite3 --foreground-scripts || $NPM install better-sqlite3 --foreground-scripts
+if $NPM approve-scripts --help >/dev/null 2>&1; then
+  $NPM approve-scripts better-sqlite3 --no-allow-scripts-pin >/dev/null 2>&1 \
+    || $NPM approve-scripts better-sqlite3 >/dev/null 2>&1 \
+    || true
 fi
+
+$NPM install --foreground-scripts
+
+ensure_sqlite_binding() {
+  find node_modules/better-sqlite3 -name 'better_sqlite3.node' 2>/dev/null | head -n 1
+}
+
+if [[ -z "$(ensure_sqlite_binding)" ]]; then
+  log "better-sqlite3 .node missing — forcing rebuild…"
+  if [[ -d node_modules/better-sqlite3 ]]; then
+    (
+      cd node_modules/better-sqlite3
+      $NPM run install --foreground-scripts 2>/dev/null \
+        || npx --yes prebuild-install \
+        || node-gyp rebuild --release
+    ) || $NPM rebuild better-sqlite3 --foreground-scripts || true
+  fi
+  if [[ -z "$(ensure_sqlite_binding)" ]]; then
+    log "reinstalling better-sqlite3…"
+    $NPM uninstall better-sqlite3 >/dev/null 2>&1 || true
+    $NPM install better-sqlite3 --foreground-scripts
+  fi
+fi
+
+[[ -n "$(ensure_sqlite_binding)" ]] || die "better-sqlite3 native binding still missing.
+Panel image may lack build tools, or npm 12 blocked scripts.
+Fix: ensure package.json has allowScripts.better-sqlite3=true, then wipe node_modules and restart."
 
 # --- Helmora runtime env ---
 export NODE_ENV="${NODE_ENV:-production}"
