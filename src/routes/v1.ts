@@ -31,6 +31,7 @@ import {
   type GuardrailReport,
 } from '../guardrail/index.js';
 import { routeEmbeddings } from '../services/embeddings.js';
+import { resolveRouteIdentity } from '../services/identity-context.js';
 
 export const v1Router = Router();
 
@@ -234,6 +235,24 @@ v1Router.post('/chat/completions', async (req, res, next) => {
 
     const vision = requestHasImages(guardedMessages);
 
+    const identityResolved = await resolveRouteIdentity({
+      surface: 'api',
+      headerRaw: req.header('x-helmora-identity'),
+      requestedModelRef: ctx.requestedModel,
+      meta: ctx.meta,
+      displayName: ctx.meta ? 'Helmora Mini 1.0' : null,
+      getSetting: (key) => getConfigStore().getSetting(key),
+    });
+    if (!identityResolved.ok) {
+      res.status(400).json({
+        error: {
+          message: 'Invalid X-Helmora-Identity header. Use on|off|1|0|true|false, or omit.',
+          type: 'invalid_identity_header',
+        },
+      });
+      return;
+    }
+
     const chatReq = {
       ...body,
       model: ctx.model,
@@ -249,7 +268,13 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       role: ctx.role,
       lane: ctx.lane,
       sessionKey: ctx.sessionKey,
+      identity: identityResolved.identity,
     };
+
+    res.setHeader(
+      'X-Helmora-Identity',
+      identityResolved.identity.enabled ? 'on' : 'off'
+    );
 
     if (body.stream) {
       await writeSse(

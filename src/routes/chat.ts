@@ -24,6 +24,7 @@ import {
   guardInputMessages,
   guardOutputText,
 } from '../guardrail/index.js';
+import { resolveRouteIdentity, prepareUpstreamMessages } from '../services/identity-context.js';
 
 export const chatRouter = Router();
 chatRouter.use(requireAdminSession);
@@ -69,6 +70,8 @@ type ResolvedChatModel = {
   meta: boolean;
   thinkingRequested: boolean;
   thinkingApplied: boolean;
+  /** Catalog displayName when resolved from catalog/* */
+  displayName: string | null;
 };
 
 async function resolveChatModel(
@@ -104,6 +107,7 @@ async function resolveChatModel(
         meta: true,
         thinkingRequested,
         thinkingApplied,
+        displayName: 'Helmora Mini 1.0',
       },
     };
   }
@@ -121,6 +125,7 @@ async function resolveChatModel(
         meta: true,
         thinkingRequested,
         thinkingApplied,
+        displayName: 'Helmora Mini 1.0',
       },
     };
   }
@@ -161,6 +166,7 @@ async function resolveChatModel(
       meta: false,
       thinkingRequested,
       thinkingApplied,
+      displayName: row.displayName ?? row.modelId,
     },
   };
 }
@@ -241,6 +247,24 @@ chatRouter.post('/completions', async (req, res, next) => {
     }
 
     const ctx = resolved.value;
+    const identityResolved = await resolveRouteIdentity({
+      surface: 'playground',
+      headerRaw: req.header('x-helmora-identity'),
+      requestedModelRef: ctx.requestedModel,
+      meta: ctx.meta,
+      displayName: ctx.displayName,
+      getSetting: (key) => getConfigStore().getSetting(key),
+    });
+    if (!identityResolved.ok) {
+      res.status(400).json({
+        error: {
+          message: 'Invalid X-Helmora-Identity header. Use on|off|1|0|true|false, or omit.',
+          type: 'invalid_identity_header',
+        },
+      });
+      return;
+    }
+
     const messages = body.messages.map((m) => ({
       role: m.role,
       content: m.content,
@@ -278,7 +302,13 @@ chatRouter.post('/completions', async (req, res, next) => {
       mode: ctx.mode,
       onlyProviderId: ctx.onlyProviderId,
       sessionKey: null as string | null,
+      identity: identityResolved.identity,
     };
+
+    res.setHeader(
+      'X-Helmora-Identity',
+      identityResolved.identity.enabled ? 'on' : 'off'
+    );
 
     const wantStream = body.stream !== false;
 
@@ -304,7 +334,17 @@ chatRouter.post('/completions', async (req, res, next) => {
         usageStatus = 'error';
       }
 
-      const usage = extractUsage(result.body, guardedMessages);
+      const providers = await listProviders();
+      const providerLabel =
+        providers.find((p) => p.id === result.providerId)?.label ?? result.providerId;
+      const usageMessages = messagesForUsageEstimate(
+        (compressedReq as { messages?: Array<{ role: string; content?: unknown }> })
+          .messages ?? guardedMessages,
+        result,
+        identityResolved.identity,
+        providerLabel
+      );
+      const usage = extractUsage(result.body, usageMessages);
       await recordAdminUsage({
         providerId: result.providerId,
         routedModel: result.model,
@@ -421,12 +461,27 @@ chatRouter.post('/completions', async (req, res, next) => {
     const hasReal =
       streamUsage &&
       (streamUsage.prompt_tokens || streamUsage.completion_tokens);
-    const usage: TokenUsage = hasReal
-      ? streamUsage!
-      : {
-          prompt_tokens: estimatePromptTokensWithVision(guardedMessages),
-          completion_tokens: Math.max(1, Math.ceil((assembled.length || 64) / 4)),
-        };
+    let usage: TokenUsage;
+    if (hasReal) {
+      usage = streamUsage!;
+    } else {
+      const providers = await listProviders();
+      const providerLabel =
+        providers.find((p) => p.id === result.providerId)?.label ?? result.providerId;
+      const usageMessages = messagesForUsageEstimate(
+        (compressedReq as { messages?: Array<{ role: string; content?: unknown }> })
+          .messages ?? guardedMessages,
+        result,
+        identityResolved.identity,
+        providerLabel
+      );
+      usage = {
+        prompt_tokens: estimatePromptTokensWithVision(
+          usageMessages.map((m) => ({ role: m.role, content: m.content ?? '' }))
+        ),
+        completion_tokens: Math.max(1, Math.ceil((assembled.length || 64) / 4)),
+      };
+    }
 
     await recordAdminUsage({
       providerId: result.providerId,
@@ -442,6 +497,41 @@ chatRouter.post('/completions', async (req, res, next) => {
     next(err);
   }
 });
+
+function messagesForUsageEstimate(
+  compressedMessages: Array<{ role: string; content?: unknown }>,
+  result: { providerId: string; model: string },
+  identity: {
+    enabled: boolean;
+    surface: 'playground' | 'api';
+    requestedModelRef: string;
+    meta: boolean;
+    displayName?: string | null;
+  },
+  providerLabel: string
+): Array<{ role: string; content?: unknown }> {
+  if (!identity.enabled || !result.providerId || result.providerId === 'none') {
+    return compressedMessages;
+  }
+  return prepareUpstreamMessages(compressedMessages as never, {
+    surface: identity.surface,
+    identityEnabled: true,
+    attempt: {
+      providerId: result.providerId,
+      providerLabel,
+      meta: identity.meta,
+      identity: {
+        requestedModelRef: identity.requestedModelRef,
+        upstreamModelId: result.model || 'auto',
+        publicModelName: identity.meta
+          ? 'Helmora Mini 1.0'
+          : identity.displayName && !identity.displayName.includes('/')
+            ? identity.displayName
+            : null,
+      },
+    },
+  }).messagesForAdapter;
+}
 
 function extractUsage(
   body: unknown,

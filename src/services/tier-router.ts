@@ -13,6 +13,20 @@ import {
   type UpstreamResult,
   type UpstreamStreamResult,
 } from './upstream.js';
+import {
+  prepareUpstreamMessages,
+  resolvePublicModelName,
+  type IdentitySurface,
+} from './identity-context.js';
+
+export interface RouteChatIdentityOptions {
+  enabled: boolean;
+  surface: IdentitySurface;
+  requestedModelRef: string;
+  meta: boolean;
+  /** Catalog / product display name when available (API publicModelName). */
+  displayName?: string | null;
+}
 
 export interface RouteChatOptions {
   mode: HubMode;
@@ -22,6 +36,39 @@ export interface RouteChatOptions {
   signal?: AbortSignal;
   /** Pin routing to this provider only (catalog model selection). */
   onlyProviderId?: string | null;
+  /** Attempt-scoped Helmora identity injection (rev 2). */
+  identity?: RouteChatIdentityOptions | null;
+}
+
+function withAttemptIdentity(
+  request: ChatRequest,
+  provider: ProviderToggle,
+  identity: RouteChatIdentityOptions | null | undefined
+): ChatRequest {
+  if (!identity?.enabled) return request;
+  const upstreamModelId =
+    (typeof request.model === 'string' && request.model.trim()) ||
+    provider.defaultModel ||
+    'auto';
+  const prepared = prepareUpstreamMessages(request.messages, {
+    surface: identity.surface,
+    identityEnabled: true,
+    attempt: {
+      providerId: provider.id,
+      providerLabel: provider.label,
+      meta: identity.meta,
+      identity: {
+        requestedModelRef: identity.requestedModelRef,
+        upstreamModelId,
+        publicModelName: resolvePublicModelName({
+          meta: identity.meta,
+          displayName: identity.displayName,
+          upstreamModelId,
+        }),
+      },
+    },
+  });
+  return { ...request, messages: prepared.messagesForAdapter };
 }
 
 export interface RouteChatResult extends UpstreamResult {
@@ -145,9 +192,14 @@ export async function routeChat(
       continue;
     }
 
+    const attemptReq = withAttemptIdentity(
+      { ...request, stream: false },
+      provider,
+      options.identity
+    );
     const result = provider.baseUrl
-      ? await dispatchChat(provider, { ...request, stream: false }, options.signal)
-      : demoCompletion(provider, request);
+      ? await dispatchChat(provider, attemptReq, options.signal)
+      : demoCompletion(provider, attemptReq);
 
     attempts.push({
       providerId: provider.id,
@@ -247,13 +299,14 @@ export async function routeChatStream(
       continue;
     }
 
+    const attemptReq = withAttemptIdentity(
+      { ...request, stream: true },
+      provider,
+      options.identity
+    );
     const result = provider.baseUrl
-      ? await dispatchChatStream(
-          provider,
-          { ...request, stream: true },
-          options.signal
-        )
-      : demoCompletionStream(provider, request);
+      ? await dispatchChatStream(provider, attemptReq, options.signal)
+      : demoCompletionStream(provider, attemptReq);
 
     if (!result.ok) {
       attempts.push({

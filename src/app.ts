@@ -27,6 +27,7 @@ export function createApp(_config: Config) {
     cors({
       origin: true,
       credentials: true,
+      exposedHeaders: ['X-Helmora-Identity', 'X-Ctrl-Meta-Model', 'X-Routed-Via'],
     })
   );
   app.use(express.json({ limit: '10mb' }));
