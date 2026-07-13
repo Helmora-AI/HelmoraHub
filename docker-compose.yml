@@ -1,0 +1,40 @@
+services:
+  helmora:
+    build: .
+    image: helmora:local
+    container_name: helmora
+    restart: unless-stopped
+    ports:
+      - "${PORT:-20800}:20800"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 20800
+      HELMORA_PUBLIC: "1"
+      DATA_DIR: /app/data
+      HELMORA_API_KEY: ${HELMORA_API_KEY:-${CTRLHUB_API_KEY:-}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      RATE_BACKEND: ${RATE_BACKEND:-memory}
+      REDIS_URL: ${REDIS_URL:-}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      UPSTREAM_MODEL: ${UPSTREAM_MODEL:-}
+    volumes:
+      - helmora_data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:20800/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  helmora_data:

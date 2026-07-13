@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Helmora AI Settings</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --line: #2a3542;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #3d9a7a;
+      --accent-dim: #2a6b55;
+      --warn: #c4a35a;
+      --danger: #c45c5c;
+      --ok: #5cb88a;
+      --font: "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      background:
+        radial-gradient(ellipse 80% 50% at 20% -10%, #1a3a32 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 1.75rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1rem;
+    }
+    .card h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+      font-weight: 600;
+    }
+    .choice {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .choice label {
+      flex: 1;
+      min-width: 140px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .choice label:hover { border-color: var(--accent-dim); }
+    .choice label.active {
+      border-color: var(--accent);
+      background: rgba(61, 154, 122, 0.12);
+    }
+    .choice input { accent-color: var(--accent); margin-right: 0.45rem; }
+    .choice .title { font-weight: 600; display: block; margin-bottom: 0.25rem; }
+    .choice .desc { font-size: 0.8rem; color: var(--muted); line-height: 1.35; }
+    label.field {
+      display: block;
+      margin-bottom: 0.85rem;
+      font-size: 0.85rem;
+    }
+    label.field span {
+      display: block;
+      margin-bottom: 0.35rem;
+      color: var(--muted);
+    }
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    input:focus, select:focus {
+      outline: 2px solid var(--accent-dim);
+      border-color: var(--accent);
+    }
+    .sql-only[hidden], [hidden] { display: none !important; }
+    .row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 1.1rem;
+    }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 0.6rem 1.1rem;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #06140f;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    button.secondary {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    button.danger {
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid var(--danger);
+    }
+    .status {
+      font-size: 0.85rem;
+      margin-top: 0.85rem;
+      min-height: 1.3em;
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--danger); }
+    .pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      background: rgba(61, 154, 122, 0.15);
+      color: var(--accent);
+      border: 1px solid var(--accent-dim);
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+    .pill.warn {
+      background: rgba(196, 163, 90, 0.15);
+      color: var(--warn);
+      border-color: var(--warn);
+    }
+    .pill.off {
+      background: rgba(139, 154, 171, 0.12);
+      color: var(--muted);
+      border-color: var(--line);
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0.5rem 0 0;
+    }
+    .checks {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      margin: 0.75rem 0 0.25rem;
+      font-size: 0.85rem;
+    }
+    .checks label { cursor: pointer; color: var(--text); }
+    .checks input { accent-color: var(--accent); margin-right: 0.4rem; }
+    a { color: var(--accent); }
+    code { font-size: 0.85em; }
+    .token-box {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: 1px dashed var(--warn);
+      background: rgba(196, 163, 90, 0.08);
+      font-family: ui-monospace, monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+      color: var(--warn);
+    }
+    .prov-filters {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+    .prov-filters select, .prov-filters input {
+      width: auto;
+      min-width: 7rem;
+      padding: 0.4rem 0.55rem;
+      font-size: 0.8rem;
+    }
+    .prov-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .prov-table th, .prov-table td {
+      text-align: left;
+      padding: 0.45rem 0.35rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .prov-table th { color: var(--muted); font-weight: 600; }
+    .prov-row.expanded { background: rgba(61, 154, 122, 0.06); }
+    .prov-detail {
+      display: none;
+      padding: 0.65rem 0.35rem 0.85rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .prov-detail.open { display: block; }
+    .chip {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.12rem 0.45rem;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .chip.ok { color: var(--ok); border-color: var(--ok); }
+    .chip.fail { color: var(--danger); border-color: var(--danger); }
+    .chip.warn { color: var(--warn); border-color: var(--warn); }
+    .note-err {
+      color: var(--danger);
+      font-size: 0.75rem;
+      margin-top: 0.35rem;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 0.5rem;
+    }
+    .tabs button {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid transparent;
+      padding: 0.45rem 0.85rem;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .tabs button:hover { color: var(--text); }
+    .tabs button.active {
+      color: var(--accent);
+      border-color: var(--accent-dim);
+      background: rgba(61, 154, 122, 0.12);
+    }
+    .tab-panel[hidden] { display: none !important; }
+    .topnav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 1.25rem;
+    }
+    .topnav a {
+      text-decoration: none;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .topnav a:hover { color: var(--text); border-color: var(--accent-dim); }
+    .topnav a.active {
+      color: var(--accent);
+      border-color: var(--accent-dim);
+      background: rgba(61, 154, 122, 0.12);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Helmora AI Settings <span class="pill off" id="activePill">…</span></h1>
+    <p class="sub" id="pageSub">Loading…</p>
+
+    <nav class="topnav" aria-label="Admin pages" style="margin-bottom:1rem">
+      <a class="active" href="/settings">Settings</a>
+      <a href="/providers">Providers</a>
+      <a href="/models">Models</a>
+    </nav>
+
+    <form id="setupForm" class="card" hidden>
+      <h2>Create admin password</h2>
+      <p class="hint">First-time setup. This locks <code>/settings</code> and <code>/api/*</code>. <code>/v1</code> still uses the separate API key.</p>
+      <label class="field">
+        <span>Admin password <small>(min 8 chars)</small></span>
+        <input type="password" name="password" minlength="8" required autocomplete="new-password" />
+      </label>
+      <label class="field">
+        <span>Confirm password</span>
+        <input type="password" name="password2" minlength="8" required autocomplete="new-password" />
+      </label>
+      <div class="row">
+        <button type="submit" id="setupBtn">Create &amp; continue</button>
+      </div>
+      <div class="status" id="setupStatus" role="status"></div>
+      <div class="token-box" id="setupTokenBox" hidden></div>
+    </form>
+
+    <form id="loginForm" class="card" hidden>
+      <h2>Admin login</h2>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" required autocomplete="current-password" />
+      </label>
+      <div class="row">
+        <button type="submit" id="loginBtn">Log in</button>
+      </div>
+      <div class="status" id="loginStatus" role="status"></div>
+      <p class="hint">External tools: <code>Authorization: Bearer &lt;admin-token&gt;</code> or <code>X-Admin-Token</code>.</p>
+    </form>
+
+    <div id="appPanel" hidden>
+      <nav class="tabs" id="settingsTabs" aria-label="Settings sections">
+        <button type="button" class="active" data-tab="general">General</button>
+        <button type="button" data-tab="keys">API keys</button>
+        <button type="button" data-tab="tunnel">Tunnel</button>
+      </nav>
+
+      <div class="tab-panel" data-panel="general">
+      <div class="card">
+        <h2>Admin access</h2>
+        <p class="hint">
+          Session cookie for this browser. For scripts / integrations, use the <strong>admin token</strong>
+          (not the <code>/v1</code> API key).
+        </p>
+        <div class="row">
+          <button type="button" id="rotateTokenBtn">Rotate admin token</button>
+          <button type="button" class="secondary" id="logoutBtn">Log out</button>
+        </div>
+        <div class="status" id="adminStatus" role="status"></div>
+        <div class="token-box" id="adminTokenBox" hidden></div>
+      </div>
+
+      <form id="form" class="card">
+        <h2>Storage backend</h2>
+        <div id="controlBanner" class="hint" hidden role="status"></div>
+        <div class="choice" role="radiogroup" aria-label="Storage backend">
+          <label id="opt-local">
+            <input type="radio" name="storageChoice" value="local" checked />
+            <span class="title">Local</span>
+            <span class="desc">SQLite on this machine. Default for local &amp; Docker.</span>
+          </label>
+          <label id="opt-sql">
+            <input type="radio" name="storageChoice" value="sql" />
+            <span class="title">SQL (Supabase)</span>
+            <span class="desc">Hybrid: control on Supabase; vault &amp; workspace on local SQLite.</span>
+          </label>
+        </div>
+
+        <div id="sqlFields" class="sql-only" hidden style="margin-top: 1.25rem">
+          <p class="hint">
+            Apply <code>sql/supabase-schema.sql</code> in the Supabase SQL editor first.
+          </p>
+          <label class="field">
+            <span>Supabase URL</span>
+            <input type="text" name="supabaseUrl" placeholder="https://xxxx.supabase.co" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Service role key <small>(leave blank to keep current)</small></span>
+            <input type="password" name="supabaseServiceRoleKey" placeholder="eyJ…" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Encryption key <small>(AES-GCM; leave blank to keep / use env)</small></span>
+            <input type="password" name="encryptionKey" placeholder="32+ byte secret" autocomplete="off" />
+          </label>
+        </div>
+
+        <div class="row">
+          <button type="submit" id="saveBtn">Save storage</button>
+          <button type="button" class="secondary" id="reloadBtn">Reload</button>
+        </div>
+        <div class="status" id="status" role="status"></div>
+      </form>
+
+      <div class="card">
+        <h2>Also</h2>
+        <p class="hint">
+          <a href="/api/status">/api/status</a> ·
+          <a href="/health">/health</a> ·
+          <a href="/providers">/providers</a> ·
+          <a href="/models">/models</a> ·
+          <a href="/api/auth/status">/api/auth/status</a>
+        </p>
+      </div>
+      </div>
+
+      <div class="tab-panel" data-panel="keys" hidden>
+      <div class="card">
+        <h2>API keys <span class="pill off" id="keysPill">/v1</span></h2>
+        <p class="hint">
+          Client keys for OpenAI-compatible <code>/v1</code>:
+          <code>hel_dev_…</code> (development) or <code>hel_pro_…</code> (production).
+          Optional <strong>$ budget</strong> and <strong>expiry</strong>. Meta model
+          <code>helmora-mini-1.0</code> bills the average of underlying model estimates.
+        </p>
+        <form id="keyForm">
+          <label class="field">
+            <span>Name</span>
+            <input type="text" name="name" placeholder="Cursor local" required />
+          </label>
+          <label class="field">
+            <span>Environment</span>
+            <select name="keyEnv">
+              <option value="dev">Development (hel_dev_)</option>
+              <option value="pro">Production (hel_pro_)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Budget USD <small>(blank = unlimited)</small></span>
+            <input type="text" name="budgetUsd" placeholder="10.00" />
+          </label>
+          <label class="field">
+            <span>Expires in days <small>(blank = never)</small></span>
+            <input type="text" name="expiresInDays" placeholder="90" />
+          </label>
+          <div class="row">
+            <button type="submit" id="keyCreateBtn">Create key</button>
+            <button type="button" class="secondary" id="keysReloadBtn">Reload</button>
+          </div>
+        </form>
+        <div class="status" id="keysStatus" role="status"></div>
+        <div class="token-box" id="keyPlainBox" hidden></div>
+        <div id="keysList" class="hint" style="margin-top:1rem"></div>
+      </div>
+      </div>
+
+      <div class="tab-panel" data-panel="tunnel" hidden>
+      <form id="tunnelForm" class="card">
+        <h2>Cloudflare Tunnel <span class="pill off" id="tunnelPill">off</span></h2>
+        <p class="hint">
+          Named tunnel with <strong>connector token</strong>.
+          Public Hostname → <code>http://127.0.0.1:<span id="localPortHint">20800</span></code>.
+          Token file also works: <code>data/cloudflare-tunnel.token</code>.
+        </p>
+
+        <label class="field" style="margin-top: 1rem">
+          <span>Tunnel token <small id="tokenHint">(leave blank to keep)</small></span>
+          <input type="password" name="token" placeholder="eyJ…" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Public hostname <small>(display only)</small></span>
+          <input type="text" name="hostname" placeholder="hub.example.com" autocomplete="off" />
+        </label>
+
+        <div class="checks">
+          <label><input type="checkbox" name="enabled" /> Enable tunnel</label>
+          <label><input type="checkbox" name="autoStart" checked /> Auto-start when Helmora AI boots</label>
+        </div>
+
+        <div class="row">
+          <button type="submit" id="tunnelSaveBtn">Save tunnel</button>
+          <button type="button" id="tunnelStartBtn">Start</button>
+          <button type="button" class="danger" id="tunnelStopBtn">Stop</button>
+        </div>
+        <div class="status" id="tunnelStatus" role="status"></div>
+        <p class="hint" id="tunnelUrl" hidden></p>
+      </form>
+      </div>
+    </div>
+  </main>
+  <script>
+    const setupForm = document.getElementById('setupForm');
+    const loginForm = document.getElementById('loginForm');
+    const appPanel = document.getElementById('appPanel');
+    const form = document.getElementById('form');
+    const tunnelForm = document.getElementById('tunnelForm');
+    const sqlFields = document.getElementById('sqlFields');
+    const statusEl = document.getElementById('status');
+    const tunnelStatusEl = document.getElementById('tunnelStatus');
+    const activePill = document.getElementById('activePill');
+    const tunnelPill = document.getElementById('tunnelPill');
+    const pageSub = document.getElementById('pageSub');
+    const saveBtn = document.getElementById('saveBtn');
+    const tunnelSaveBtn = document.getElementById('tunnelSaveBtn');
+    const tunnelUrl = document.getElementById('tunnelUrl');
+    const setupTokenBox = document.getElementById('setupTokenBox');
+    const adminTokenBox = document.getElementById('adminTokenBox');
+    const adminStatus = document.getElementById('adminStatus');
+
+    function syncChoiceUI() {
+      const choice = form.storageChoice.value;
+      sqlFields.hidden = choice !== 'sql';
+      document.getElementById('opt-local').classList.toggle('active', choice === 'local');
+      document.getElementById('opt-sql').classList.toggle('active', choice === 'sql');
+    }
+
+    form.querySelectorAll('input[name="storageChoice"]').forEach((el) =>
+      el.addEventListener('change', syncChoiceUI)
+    );
+
+    function showGate(mode) {
+      setupForm.hidden = mode !== 'setup';
+      loginForm.hidden = mode !== 'login';
+      appPanel.hidden = mode !== 'app';
+      if (mode === 'setup') {
+        pageSub.textContent = 'Create an admin password to protect Settings and /api.';
+        activePill.textContent = 'setup';
+        activePill.className = 'pill warn';
+      } else if (mode === 'login') {
+        pageSub.textContent = 'Log in to manage storage, tunnel, and providers.';
+        activePill.textContent = 'locked';
+        activePill.className = 'pill warn';
+      } else {
+        pageSub.innerHTML =
+          'Storage, API keys, and tunnel. Manage providers at <a href="/providers">/providers</a> · models at <a href="/models">/models</a>.';
+        const hash = (location.hash || '#general').replace('#', '');
+        if (hash === 'providers') {
+          location.replace('/providers');
+          return;
+        }
+        if (hash === 'models') {
+          location.replace('/models');
+          return;
+        }
+        switchTab(['general', 'keys', 'tunnel'].includes(hash) ? hash : 'general');
+      }
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('#settingsTabs button').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
+      });
+      document.querySelectorAll('.tab-panel').forEach((panel) => {
+        panel.hidden = panel.getAttribute('data-panel') !== name;
+      });
+      if (location.hash.replace('#', '') !== name) {
+        history.replaceState(null, '', '#' + name);
+      }
+      if (name === 'keys') loadKeys().catch(() => {});
+      if (name === 'tunnel') loadTunnel().catch(() => {});
+    }
+
+    document.getElementById('settingsTabs')?.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button[data-tab]');
+      if (!btn) return;
+      switchTab(btn.getAttribute('data-tab'));
+    });
+
+    window.addEventListener('hashchange', () => {
+      if (appPanel.hidden) return;
+      const hash = (location.hash || '#general').replace('#', '');
+      if (hash === 'providers') {
+        location.replace('/providers');
+        return;
+      }
+      if (hash === 'models') {
+        location.replace('/models');
+        return;
+      }
+      if (['general', 'keys', 'tunnel'].includes(hash)) switchTab(hash);
+    });
+
+    function paintTunnel(t) {
+      tunnelForm.enabled.checked = Boolean(t.enabled);
+      tunnelForm.autoStart.checked = t.autoStart !== false;
+      tunnelForm.hostname.value = t.hostname || '';
+      tunnelForm.token.value = '';
+      document.getElementById('tokenHint').textContent = t.hasToken
+        ? '(leave blank to keep current)'
+        : '(required to start)';
+      document.getElementById('localPortHint').textContent = String(t.localPort || 20800);
+      tunnelPill.textContent = t.running ? 'running' : t.enabled ? 'enabled' : 'off';
+      tunnelPill.className = 'pill ' + (t.running ? '' : t.enabled ? 'warn' : 'off');
+      if (t.publicUrl) {
+        tunnelUrl.hidden = false;
+        tunnelUrl.innerHTML = 'Public URL: <a href="' + t.publicUrl + '" target="_blank" rel="noopener">' + t.publicUrl + '</a>';
+      } else {
+        tunnelUrl.hidden = true;
+        tunnelUrl.textContent = '';
+      }
+      if (t.lastError && !t.running) {
+        tunnelStatusEl.textContent = t.lastError;
+        tunnelStatusEl.className = 'status err';
+      }
+    }
+
+    async function loadTunnel() {
+      const res = await fetch('/api/settings/tunnel', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load tunnel');
+      paintTunnel(data);
+    }
+
+    async function loadStorage() {
+      statusEl.textContent = '';
+      statusEl.className = 'status';
+      const res = await fetch('/api/settings/storage', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load');
+      form.storageChoice.value = data.current.choice || 'local';
+      form.supabaseUrl.value = data.form.supabaseUrl || '';
+      form.supabaseServiceRoleKey.value = '';
+      form.encryptionKey.value = '';
+      activePill.textContent = data.current.choice === 'sql' ? 'SQL' : 'Local';
+      activePill.className = 'pill';
+      paintControlBanner(data.control || data.current?.control);
+      syncChoiceUI();
+      await loadTunnel();
+    }
+
+    function paintControlBanner(control) {
+      const banner = document.getElementById('controlBanner');
+      if (!banner) return;
+      if (!control || !control.controlPlane) {
+        banner.hidden = true;
+        banner.textContent = '';
+        return;
+      }
+      if (control.controlPlane === 'degraded') {
+        banner.hidden = false;
+        banner.textContent =
+          'Supabase unavailable — control changes queued locally (outbox pending: ' +
+          (control.outboxPending ?? 0) +
+          ').';
+        return;
+      }
+      if (control.controlPlane === 'reconciling') {
+        banner.hidden = false;
+        banner.textContent = 'Reconciling control plane with Supabase…';
+        return;
+      }
+      banner.hidden = true;
+      banner.textContent = '';
+    }
+
+    async function boot() {
+      const res = await fetch('/api/auth/status', { credentials: 'include' });
+      const auth = await res.json();
+      if (!res.ok) throw new Error(auth.error?.message || 'Auth status failed');
+
+      if (auth.setupRequired) {
+        showGate('setup');
+        return;
+      }
+      if (!auth.authenticated) {
+        showGate('login');
+        return;
+      }
+      showGate('app');
+      await loadStorage();
+      await loadKeys();
+    }
+
+    async function loadKeys() {
+      const keysStatus = document.getElementById('keysStatus');
+      const keysList = document.getElementById('keysList');
+      const res = await fetch('/api/keys', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load keys');
+      document.getElementById('keysPill').textContent = data.keys.length + ' keys';
+      document.getElementById('keysPill').className = 'pill';
+      keysList.innerHTML = (data.keys || [])
+        .map((k) => {
+          const budget =
+            k.budgetUsd == null
+              ? '∞'
+              : '$' + Number(k.spentUsd).toFixed(4) + ' / $' + Number(k.budgetUsd).toFixed(2);
+          const exp = k.expiresAt
+            ? new Date(k.expiresAt).toLocaleDateString()
+            : 'never';
+          return (
+            '<div style="margin:0.4rem 0;padding:0.5rem 0;border-top:1px solid var(--line)">' +
+            '<strong>' +
+            k.name +
+            '</strong> · ' +
+            k.keyEnv +
+            ' · <code>' +
+            k.keyPreview +
+            '</code><br/>spent ' +
+            budget +
+            ' · expires ' +
+            exp +
+            (k.enabled ? '' : ' · <span style="color:var(--danger)">disabled</span>') +
+            ' · <a href="#" data-revoke="' +
+            k.id +
+            '">revoke</a></div>'
+          );
+        })
+        .join('') || '<p>No keys yet.</p>';
+
+      keysList.querySelectorAll('[data-revoke]').forEach((a) => {
+        a.addEventListener('click', async (ev) => {
+          ev.preventDefault();
+          const id = a.getAttribute('data-revoke');
+          if (!confirm('Revoke this API key?')) return;
+          const r = await fetch('/api/keys/' + id, {
+            method: 'DELETE',
+            credentials: 'include',
+          });
+          if (!r.ok) {
+            keysStatus.textContent = 'Revoke failed';
+            keysStatus.className = 'status err';
+            return;
+          }
+          await loadKeys();
+        });
+      });
+    }
+
+    setupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const p1 = setupForm.password.value;
+      const p2 = setupForm.password2.value;
+      const setupStatus = document.getElementById('setupStatus');
+      if (p1 !== p2) {
+        setupStatus.textContent = 'Passwords do not match';
+        setupStatus.className = 'status err';
+        return;
+      }
+      document.getElementById('setupBtn').disabled = true;
+      setupStatus.textContent = 'Creating…';
+      setupStatus.className = 'status';
+      try {
+        const res = await fetch('/api/auth/setup', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: p1 }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || 'Setup failed');
+        setupStatus.textContent = data.message;
+        setupStatus.className = 'status ok';
+        if (data.adminToken) {
+          setupTokenBox.hidden = false;
+          setupTokenBox.textContent = 'Admin token (copy now): ' + data.adminToken;
+        }
+        setTimeout(() => boot().catch(console.error), 800);
+      } catch (err) {
+        setupStatus.textContent = err.message || String(err);
+        setupStatus.className = 'status err';
+      } finally {
+        document.getElementById('setupBtn').disabled = false;
+      }
+    });
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const loginStatus = document.getElementById('loginStatus');
+      document.getElementById('loginBtn').disabled = true;
+      loginStatus.textContent = 'Logging in…';
+      loginStatus.className = 'status';
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: loginForm.password.value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || 'Login failed');
+        await boot();
+      } catch (err) {
+        loginStatus.textContent = err.message || String(err);
+        loginStatus.className = 'status err';
+      } finally {
+        document.getElementById('loginBtn').disabled = false;
+      }
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      adminTokenBox.hidden = true;
+      await boot();
+    });
+
+    document.getElementById('rotateTokenBtn').addEventListener('click', async () => {
+      adminStatus.textContent = 'Rotating…';
+      adminStatus.className = 'status';
+      try {
+        const res = await fetch('/api/auth/rotate-token', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || 'Rotate failed');
+        adminStatus.textContent = data.message;
+        adminStatus.className = 'status ok';
+        adminTokenBox.hidden = false;
+        adminTokenBox.textContent = 'Admin token (copy now): ' + data.adminToken;
+      } catch (err) {
+        adminStatus.textContent = err.message || String(err);
+        adminStatus.className = 'status err';
+      }
+    });
+
+    document.getElementById('keyForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const keysStatus = document.getElementById('keysStatus');
+      const keyPlainBox = document.getElementById('keyPlainBox');
+      document.getElementById('keyCreateBtn').disabled = true;
+      keysStatus.textContent = 'Creating…';
+      keysStatus.className = 'status';
+      const budgetRaw = form.budgetUsd.value.trim();
+      const daysRaw = form.expiresInDays.value.trim();
+      const body = {
+        name: form.name.value.trim(),
+        keyEnv: form.keyEnv.value,
+        budgetUsd: budgetRaw ? Number(budgetRaw) : null,
+        expiresInDays: daysRaw ? Number(daysRaw) : null,
+      };
+      try {
+        const res = await fetch('/api/keys', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || 'Create failed');
+        keysStatus.textContent = data.message;
+        keysStatus.className = 'status ok';
+        keyPlainBox.hidden = false;
+        keyPlainBox.textContent = 'API key (copy now): ' + data.plaintext;
+        form.name.value = '';
+        form.budgetUsd.value = '';
+        form.expiresInDays.value = '';
+        await loadKeys();
+      } catch (err) {
+        keysStatus.textContent = err.message || String(err);
+        keysStatus.className = 'status err';
+      } finally {
+        document.getElementById('keyCreateBtn').disabled = false;
+      }
+    });
+
+    document.getElementById('keysReloadBtn').addEventListener('click', () => {
+      loadKeys().catch((err) => {
+        document.getElementById('keysStatus').textContent = err.message;
+        document.getElementById('keysStatus').className = 'status err';
+      });
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      saveBtn.disabled = true;
+      statusEl.textContent = 'Saving…';
+      statusEl.className = 'status';
+      const choice = form.storageChoice.value;
+      const body = { storageChoice: choice };
+      if (choice === 'sql') {
+        body.supabaseUrl = form.supabaseUrl.value.trim() || null;
+        if (form.supabaseServiceRoleKey.value.trim()) {
+          body.supabaseServiceRoleKey = form.supabaseServiceRoleKey.value.trim();
+        }
+        if (form.encryptionKey.value.trim()) {
+          body.encryptionKey = form.encryptionKey.value.trim();
+        }
+      }
+      try {
+        const res = await fetch('/api/settings/storage', {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || data.message || 'Save failed');
+        statusEl.textContent = data.message || 'Saved.';
+        statusEl.className = 'status ok';
+        activePill.textContent = data.current.choice === 'sql' ? 'SQL' : 'Local';
+        form.supabaseServiceRoleKey.value = '';
+        form.encryptionKey.value = '';
+      } catch (err) {
+        statusEl.textContent = err.message || String(err);
+        statusEl.className = 'status err';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    tunnelForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      tunnelSaveBtn.disabled = true;
+      tunnelStatusEl.textContent = 'Saving…';
+      tunnelStatusEl.className = 'status';
+      const body = {
+        enabled: tunnelForm.enabled.checked,
+        autoStart: tunnelForm.autoStart.checked,
+        hostname: tunnelForm.hostname.value.trim() || null,
+        action: 'none',
+      };
+      if (tunnelForm.token.value.trim()) body.token = tunnelForm.token.value.trim();
+      try {
+        const res = await fetch('/api/settings/tunnel', {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || data.error || 'Save failed');
+        tunnelStatusEl.textContent = data.message || 'Saved.';
+        tunnelStatusEl.className = 'status ok';
+        paintTunnel(data.tunnel);
+      } catch (err) {
+        tunnelStatusEl.textContent = err.message || String(err);
+        tunnelStatusEl.className = 'status err';
+      } finally {
+        tunnelSaveBtn.disabled = false;
+      }
+    });
+
+    async function tunnelAction(path) {
+      tunnelStatusEl.textContent = 'Working…';
+      tunnelStatusEl.className = 'status';
+      const res = await fetch(path, { method: 'POST', credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Request failed');
+      tunnelStatusEl.textContent = data.message || 'OK';
+      tunnelStatusEl.className = 'status ok';
+      paintTunnel(data.tunnel);
+    }
+
+    document.getElementById('tunnelStartBtn').addEventListener('click', () => {
+      tunnelAction('/api/settings/tunnel/start').catch((err) => {
+        tunnelStatusEl.textContent = err.message;
+        tunnelStatusEl.className = 'status err';
+      });
+    });
+    document.getElementById('tunnelStopBtn').addEventListener('click', () => {
+      tunnelAction('/api/settings/tunnel/stop').catch((err) => {
+        tunnelStatusEl.textContent = err.message;
+        tunnelStatusEl.className = 'status err';
+      });
+    });
+    document.getElementById('reloadBtn').addEventListener('click', () => {
+      loadStorage().catch((err) => {
+        statusEl.textContent = err.message;
+        statusEl.className = 'status err';
+      });
+    });
+
+    boot().catch((err) => {
+      pageSub.textContent = err.message || String(err);
+      activePill.textContent = 'error';
+      activePill.className = 'pill warn';
+    });
+  </script>
+</body>
+</html>

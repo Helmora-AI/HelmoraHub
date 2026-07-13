@@ -1,0 +1,102 @@
+{
+  "_comment": "Import via Pterodactyl Admin → Nests → Eggs → Import. Use a Node.js egg nest.",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-07-11T00:00:00+00:00",
+  "name": "Helmora Hub",
+  "author": "helmora",
+  "description": "Helmora Hub — OpenAI-compatible AI gateway (Node 20). Settings: /settings. Storage: Local SQLite or SQL Supabase.",
+  "features": null,
+  "docker_images": {
+    "Node.js 20": "ghcr.io/pterodactyl/yolks:nodejs_20"
+  },
+  "file_denylist": [],
+  "startup": "node scripts/ptero-start.mjs",
+  "config": {
+    "files": "{}",
+    "startup": "{\n    \"done\": [\n        \"Helmora AI listening on\"\n    ]\n}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\n# Helmora Hub Pterodactyl install\nset -e\ncd /mnt/server\n\nif [ ! -f package.json ]; then\n  echo \"Upload Helmora Hub source (or git clone) into the server directory first.\"\n  exit 1\nfi\n\n# Prefer panel Node; yolks image provides npm/node\nif command -v npm >/dev/null 2>&1; then\n  NPM=npm\nelse\n  echo \"npm not found in install container\"\n  exit 1\nfi\n\n$NPM install\n$NPM run build\n$NPM prune --omit=dev\nmkdir -p data\n\nif [ ! -f .env ] && [ -f .env.example ]; then\n  cp .env.example .env\n  echo \"Created .env from .env.example — edit via File Manager\"\nfi\n\necho \"============================================\"\necho \"Helmora Hub installed.\"\necho \"Start command: node scripts/ptero-start.mjs\"\necho \"Settings UI:   http://<ip>:<port>/settings\"\necho \"============================================\"\n",
+      "container": "ghcr.io/pterodactyl/installers:debian",
+      "entrypoint": "bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "App Port",
+      "description": "Internal listen port (Pterodactyl maps allocation → SERVER_PORT automatically in many eggs; Helmora Hub also reads SERVER_PORT).",
+      "env_variable": "PORT",
+      "default_value": "20800",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|between:1024,65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Encryption Key",
+      "description": "AES-256-GCM master key for provider API secrets. Required for SQL (Supabase) storage.",
+      "env_variable": "ENCRYPTION_KEY",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:256",
+      "field_type": "text"
+    },
+    {
+      "name": "Unified API Key",
+      "description": "Bearer key for /v1 clients. Leave empty to auto-generate on first boot.",
+      "env_variable": "HELMORA_API_KEY",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:256",
+      "field_type": "text"
+    },
+    {
+      "name": "Data Directory",
+      "description": "Persistent data path inside the container (SQLite + runtime-config.json).",
+      "env_variable": "DATA_DIR",
+      "default_value": "/home/container/data",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|string",
+      "field_type": "text"
+    },
+    {
+      "name": "Bind Public",
+      "description": "Set 1 to listen on 0.0.0.0 (recommended on panels).",
+      "env_variable": "HELMORA_PUBLIC",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:0,1",
+      "field_type": "text"
+    },
+    {
+      "name": "Cloudflare Tunnel Token",
+      "description": "Named tunnel connector token (eyJ…). Leave empty to use Settings UI or data/cloudflare-tunnel.token. Auto-starts on boot when set.",
+      "env_variable": "CLOUDFLARE_TUNNEL_TOKEN",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:4096",
+      "field_type": "text"
+    },
+    {
+      "name": "Cloudflare Tunnel Hostname",
+      "description": "Public hostname for display (e.g. hub.example.com). Configure routing in Cloudflare Zero Trust.",
+      "env_variable": "CLOUDFLARE_TUNNEL_HOSTNAME",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:253",
+      "field_type": "text"
+    }
+  ]
+}

@@ -1,0 +1,612 @@
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import { z } from 'zod';
+import { requireApiKey } from '../middleware/requireApiKey.js';
+import { resolveMode } from '../services/mode-router.js';
+import { routeChat, routeChatStream } from '../services/tier-router.js';
+import { listProviders, listAgents } from '../db/index.js';
+import { HUB_MODES, type HubMode } from '../types.js';
+import { isMetaModel, META_MODEL_ID, type TokenUsage } from '../keys/types.js';
+import {
+  averageModelCosts,
+  costForModel,
+} from '../pricing/cost.js';
+import { getConfigStore } from '../storage/index.js';
+import { randomId } from '../lib/auth.js';
+import { usdToMicros } from '../keys/types.js';
+import type { UsageEventStatus } from '../keys/types.js';
+import {
+  estimatePromptTokensWithVision,
+  mergeImagesIntoMessages,
+  requestHasImages,
+} from '../lib/vision.js';
+import { applyRtk, isRtkEnabledForMode, setRtkHeaders, type RtkStats } from '../rtk/apply.js';
+import {
+  guardInputMessages,
+  guardOutputText,
+  mergeReports,
+  setGuardrailHeaders,
+  type GuardrailReport,
+} from '../guardrail/index.js';
+import { routeEmbeddings } from '../services/embeddings.js';
+
+export const v1Router = Router();
+
+v1Router.use(requireApiKey);
+
+const embeddingsSchema = z.object({
+  model: z.string().optional(),
+  input: z.union([z.string().min(1), z.array(z.string()).min(1)]),
+  encoding_format: z.enum(['float', 'base64']).optional(),
+  dimensions: z.number().int().positive().max(4096).optional(),
+});
+
+const chatSchema = z
+  .object({
+    model: z.string().optional(),
+    messages: z
+      .array(
+        z.object({
+          role: z.string(),
+          content: z.unknown(),
+        })
+      )
+      .min(1),
+    stream: z.boolean().optional(),
+    temperature: z.number().optional(),
+    max_tokens: z.number().optional(),
+    role: z.string().optional(),
+    lane: z.string().optional(),
+    conversation_id: z.string().optional(),
+    session_id: z.string().optional(),
+    /** Helper: merge into last user message as image_url parts */
+    images: z.array(z.string().min(1)).max(16).optional(),
+  })
+  .passthrough();
+
+v1Router.get('/models', async (_req, res, next) => {
+  try {
+    const providers = (await listProviders()).filter((p) => p.enabled);
+    const agents = (await listAgents()).filter((a) => a.enabled);
+    const data = [
+      { id: META_MODEL_ID, object: 'model', created: 0, owned_by: 'helmora' },
+      { id: 'auto', object: 'model', created: 0, owned_by: 'helmora' },
+      ...HUB_MODES.map((mode) => ({
+        id: `mode/${mode}`,
+        object: 'model',
+        created: 0,
+        owned_by: 'helmora',
+      })),
+      ...providers
+        .filter((p) => p.defaultModel)
+        .map((p) => ({
+          id: p.defaultModel as string,
+          object: 'model',
+          created: 0,
+          owned_by: p.id,
+        })),
+      ...agents.map((a) => ({
+        id: `agent/${a.id}`,
+        object: 'model',
+        created: 0,
+        owned_by: a.nickname,
+      })),
+      {
+        id: 'text-embedding-3-small',
+        object: 'model',
+        created: 0,
+        owned_by: 'helmora',
+      },
+    ];
+    res.json({ object: 'list', data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+v1Router.post('/embeddings', async (req, res, next) => {
+  try {
+    const parsed = embeddingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: { message: parsed.error.message, type: 'invalid_request_error' },
+      });
+      return;
+    }
+
+    if (parsed.data.encoding_format === 'base64') {
+      res.status(400).json({
+        error: {
+          message: 'encoding_format=base64 is not supported yet; use float',
+          type: 'invalid_request_error',
+        },
+      });
+      return;
+    }
+
+    const ac = new AbortController();
+    const onClose = () => {
+      if (!res.writableFinished) ac.abort();
+    };
+    res.on('close', onClose);
+
+    let result: Awaited<ReturnType<typeof routeEmbeddings>>;
+    try {
+      result = await routeEmbeddings(parsed.data, ac.signal);
+    } finally {
+      res.off('close', onClose);
+    }
+
+    const requestId = randomId('req');
+    const store = getConfigStore();
+    const apiKey = req.ctrlApiKey?.apiKey;
+    const costUsd = costForModel(
+      result.model,
+      {
+        prompt_tokens: result.usage.prompt_tokens,
+        completion_tokens: 0,
+      },
+      result.providerId
+    );
+
+    if (apiKey) {
+      await store.addApiKeySpend(apiKey.id, costUsd);
+      await store.recordUsage({
+        requestId,
+        source: 'api',
+        apiKeyId: apiKey.id,
+        status: result.ok ? 'complete' : 'error',
+        model: result.model,
+        underlyingModels: [result.model],
+        providerId: result.providerId,
+        costMicrosUsd: usdToMicros(costUsd),
+        promptTokens: result.usage.prompt_tokens,
+        completionTokens: 0,
+        estimated: true,
+      });
+      const refreshed = await store.getApiKeyById(apiKey.id);
+      if (refreshed) {
+        res.setHeader('X-Ctrl-Key-Env', refreshed.keyEnv);
+        res.setHeader('X-Ctrl-Cost', costUsd.toFixed(8));
+        res.setHeader('X-Ctrl-Spent', refreshed.spentUsd.toFixed(8));
+        if (refreshed.budgetUsd != null) {
+          res.setHeader('X-Ctrl-Budget', String(refreshed.budgetUsd));
+        }
+      }
+    }
+    res.setHeader('X-Routed-Via', result.providerId);
+    res.setHeader('X-Ctrl-Request-Id', requestId);
+
+    if (!result.ok) {
+      res.status(result.status >= 400 ? result.status : 502).json(
+        result.body ?? {
+          error: { message: result.error ?? 'embeddings_failed', type: 'upstream_error' },
+        }
+      );
+      return;
+    }
+
+    res.status(200).json(result.body);
+  } catch (err) {
+    next(err);
+  }
+});
+
+v1Router.post('/chat/completions', async (req, res, next) => {
+  try {
+    const parsed = chatSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: { message: parsed.error.message, type: 'invalid_request_error' },
+      });
+      return;
+    }
+
+    const body = parsed.data;
+    const headerMode =
+      req.header('x-helmora-mode') ??
+      req.header('x-ctrl-mode') ??
+      req.header('x-ctrlhub-mode');
+    const ctx = await buildContext(body, headerMode);
+
+    const normalizedMessages = mergeImagesIntoMessages(
+      body.messages.map((m) => ({
+        role: m.role,
+        content: m.content ?? '',
+      })),
+      body.images
+    );
+
+    const { messages: guardedMessages, report: inputGuard } =
+      guardInputMessages(normalizedMessages);
+    if (inputGuard.blocked) {
+      setGuardrailHeaders(res, inputGuard, false);
+      res.status(400).json({
+        error: {
+          message: inputGuard.blockMessage ?? 'Request blocked by guardrail.',
+          type: 'guardrail_blocked',
+        },
+      });
+      return;
+    }
+
+    const vision = requestHasImages(guardedMessages);
+
+    const chatReq = {
+      ...body,
+      model: ctx.model,
+      messages: guardedMessages,
+    };
+    delete (chatReq as { images?: unknown }).images;
+
+    const rtkOn = isRtkEnabledForMode(ctx.mode);
+    const { body: compressedReq, stats: rtkStats } = applyRtk(chatReq, rtkOn);
+
+    const opts = {
+      mode: ctx.mode,
+      role: ctx.role,
+      lane: ctx.lane,
+      sessionKey: ctx.sessionKey,
+    };
+
+    if (body.stream) {
+      await writeSse(
+        req,
+        res,
+        compressedReq,
+        opts,
+        ctx,
+        guardedMessages,
+        vision,
+        rtkStats,
+        inputGuard
+      );
+      return;
+    }
+
+    const ac = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableFinished) ac.abort();
+    };
+    res.on('close', onClientGone);
+    let result: Awaited<ReturnType<typeof routeChat>>;
+    try {
+      result = await routeChat(compressedReq, { ...opts, signal: ac.signal });
+    } finally {
+      res.off('close', onClientGone);
+    }
+    const usage = extractUsage(result.body, guardedMessages);
+    let guardReport = inputGuard;
+    if (result.ok && result.body && typeof result.body === 'object') {
+      const guardedBody = redactAssistantInBody(result.body);
+      result.body = guardedBody.body;
+      guardReport = mergeReports(inputGuard, guardedBody.report);
+    }
+
+    await applyBilling(req, res, {
+      ...ctx,
+      providerId: result.providerId,
+      routedModel: result.model,
+      attempts: result.attempts.length,
+      usage,
+      headersSent: false,
+      vision,
+      rtkStats,
+      guardReport,
+    });
+
+    if (!result.ok) {
+      res.status(result.status >= 400 ? result.status : 502).json(result.body);
+      return;
+    }
+
+    if (result.body && typeof result.body === 'object' && !(result.body as { usage?: unknown }).usage) {
+      (result.body as { usage: TokenUsage }).usage = usage;
+    }
+    res.status(200).json(result.body);
+  } catch (err) {
+    next(err);
+  }
+});
+
+type ChatBody = z.infer<typeof chatSchema>;
+
+async function buildContext(body: ChatBody, headerMode: string | null | undefined) {
+  let mode = await resolveMode(headerMode);
+  if (body.model?.startsWith('mode/')) {
+    mode = await resolveMode(body.model.slice('mode/'.length));
+  }
+
+  let role = typeof body.role === 'string' ? body.role : null;
+  let lane = typeof body.lane === 'string' ? body.lane : null;
+  let model = body.model;
+  const requestedModel = body.model ?? 'auto';
+  const meta = isMetaModel(requestedModel);
+  const sessionKey =
+    (typeof body.session_id === 'string' && body.session_id) ||
+    (typeof body.conversation_id === 'string' && body.conversation_id) ||
+    null;
+
+  if (meta) model = 'auto';
+
+  if (body.model?.startsWith('agent/')) {
+    const agentId = body.model.slice('agent/'.length);
+    const agent = (await listAgents()).find((a) => a.id === agentId);
+    if (agent) {
+      role = agent.id;
+      lane = agent.id;
+      mode = agent.mode;
+      model = agent.model === 'auto' ? 'auto' : agent.model;
+    }
+  }
+
+  return { mode, role, lane, model, requestedModel, meta, sessionKey };
+}
+
+async function writeSse(
+  req: Request,
+  res: Response,
+  chatReq: Parameters<typeof routeChatStream>[0],
+  opts: Parameters<typeof routeChatStream>[1],
+  ctx: Awaited<ReturnType<typeof buildContext>>,
+  messages: Array<{ role: string; content?: unknown }>,
+  vision: boolean,
+  rtkStats: RtkStats | null,
+  inputGuard: GuardrailReport
+): Promise<void> {
+  const ac = new AbortController();
+  const onClientGone = () => {
+    if (!res.writableFinished) ac.abort();
+  };
+  res.on('close', onClientGone);
+
+  const result = await routeChatStream(chatReq, { ...opts, signal: ac.signal });
+
+  if (!result.ok) {
+    res.off('close', onClientGone);
+    setGuardrailHeaders(res, inputGuard, false);
+    res.status(result.status >= 400 ? result.status : 502).json(result.body);
+    return;
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('X-CtrL-Mode', ctx.mode);
+  res.setHeader('X-Routed-Via', result.providerId);
+  res.setHeader('X-Fallback-Attempts', String(result.attempts.length));
+  if (ctx.meta) res.setHeader('X-Ctrl-Meta-Model', META_MODEL_ID);
+  if (vision) res.setHeader('X-Ctrl-Vision', '1');
+  setRtkHeaders(res, rtkStats, false);
+  // Stream: only input findings are visible in headers (flushed before body).
+  setGuardrailHeaders(res, inputGuard, false);
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  try {
+    for await (const chunk of result.stream.chunks) {
+      if (ac.signal.aborted || res.writableEnded) break;
+      const safe = redactStreamChunk(chunk);
+      res.write(`data: ${JSON.stringify(safe)}\n\n`);
+    }
+    if (!res.writableEnded && !ac.signal.aborted) res.write('data: [DONE]\n\n');
+  } catch (err) {
+    if (!res.writableEnded) {
+      if (ac.signal.aborted) {
+        // client gone — don't write error frames
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        res.write(`data: ${JSON.stringify({ error: { message, type: 'stream_error' } })}\n\n`);
+        res.write('data: [DONE]\n\n');
+      }
+    }
+  } finally {
+    res.off('close', onClientGone);
+  }
+
+  if (ac.signal.aborted) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  const assembled = result.stream.getAssembledContent();
+  const streamUsage = result.stream.getUsage();
+  const usage: TokenUsage =
+    streamUsage && (streamUsage.prompt_tokens || streamUsage.completion_tokens)
+      ? streamUsage
+      : {
+          prompt_tokens: estimatePromptTokensWithVision(
+            messages.map((m) => ({ role: m.role, content: m.content ?? '' }))
+          ),
+          completion_tokens: Math.max(1, Math.ceil((assembled.length || 64) / 4)),
+        };
+
+  await applyBilling(req, res, {
+    ...ctx,
+    providerId: result.providerId,
+    routedModel: result.model,
+    attempts: result.attempts.length,
+    usage,
+    headersSent: true,
+    vision,
+    rtkStats,
+    guardReport: inputGuard,
+  });
+
+  if (!res.writableEnded) res.end();
+}
+
+function redactAssistantInBody(body: unknown): {
+  body: unknown;
+  report: GuardrailReport;
+} {
+  if (!body || typeof body !== 'object') {
+    return {
+      body,
+      report: { enabled: false, findings: [], blocked: false },
+    };
+  }
+  const clone = structuredClone(body) as {
+    choices?: Array<{ message?: { content?: unknown } }>;
+  };
+  const content = clone.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') {
+    return {
+      body: clone,
+      report: { enabled: false, findings: [], blocked: false },
+    };
+  }
+  const guarded = guardOutputText(content);
+  if (clone.choices?.[0]?.message) {
+    clone.choices[0].message.content = guarded.text;
+  }
+  return { body: clone, report: guarded.report };
+}
+
+function redactStreamChunk(chunk: unknown): unknown {
+  if (!chunk || typeof chunk !== 'object') return chunk;
+  const c = chunk as {
+    choices?: Array<{
+      delta?: { content?: unknown };
+      message?: { content?: unknown };
+    }>;
+  };
+  if (!Array.isArray(c.choices) || c.choices.length === 0) return chunk;
+  let changed = false;
+  const choices = c.choices.map((choice) => {
+    let next = choice;
+    if (typeof choice.delta?.content === 'string') {
+      const { text } = guardOutputText(choice.delta.content);
+      if (text !== choice.delta.content) {
+        changed = true;
+        next = {
+          ...next,
+          delta: { ...choice.delta, content: text },
+        };
+      }
+    }
+    if (typeof choice.message?.content === 'string') {
+      const { text } = guardOutputText(choice.message.content);
+      if (text !== choice.message.content) {
+        changed = true;
+        next = {
+          ...next,
+          message: { ...choice.message, content: text },
+        };
+      }
+    }
+    return next;
+  });
+  return changed ? { ...c, choices } : chunk;
+}
+
+async function applyBilling(
+  req: Request,
+  res: Response,
+  args: {
+    meta: boolean;
+    requestedModel: string;
+    mode: HubMode;
+    providerId: string;
+    routedModel: string;
+    attempts: number;
+    usage: TokenUsage;
+    headersSent: boolean;
+    vision?: boolean;
+    rtkStats?: RtkStats | null;
+    guardReport?: GuardrailReport | null;
+    status?: UsageEventStatus;
+    requestId?: string;
+    estimated?: boolean;
+  }
+): Promise<void> {
+  const providers = await listProviders();
+  const provider = providers.find((p) => p.id === args.providerId);
+  const underlying = [
+    ...new Set(
+      [provider?.defaultModel, args.routedModel !== 'auto' ? args.routedModel : null].filter(
+        Boolean
+      ) as string[]
+    ),
+  ];
+
+  const costUsd = args.meta
+    ? averageModelCosts(
+        underlying.length > 0 ? underlying : [provider?.defaultModel ?? args.routedModel ?? 'auto'],
+        args.usage
+      )
+    : costForModel(
+        provider?.defaultModel || args.routedModel || args.requestedModel,
+        args.usage,
+        args.providerId
+      );
+
+  const costMicrosUsd = usdToMicros(costUsd);
+  const apiKey = req.ctrlApiKey?.apiKey;
+  const requestId = args.requestId ?? randomId('req');
+  const store = getConfigStore();
+
+  if (apiKey) {
+    await store.addApiKeySpend(apiKey.id, costUsd);
+    await store.recordUsage({
+      requestId,
+      source: 'api',
+      apiKeyId: apiKey.id,
+      status: args.status ?? 'complete',
+      model: args.requestedModel,
+      underlyingModels: underlying,
+      providerId: args.providerId,
+      costMicrosUsd,
+      promptTokens: args.usage.prompt_tokens ?? null,
+      completionTokens: args.usage.completion_tokens ?? null,
+      estimated: Boolean(args.estimated),
+    });
+    if (!args.headersSent) {
+      const refreshed = await store.getApiKeyById(apiKey.id);
+      if (refreshed) {
+        res.setHeader('X-Ctrl-Key-Env', refreshed.keyEnv);
+        res.setHeader('X-Ctrl-Cost', costUsd.toFixed(8));
+        res.setHeader('X-Ctrl-Spent', refreshed.spentUsd.toFixed(8));
+        if (refreshed.budgetUsd != null) {
+          res.setHeader('X-Ctrl-Budget', String(refreshed.budgetUsd));
+        }
+      }
+    }
+  }
+
+  if (!args.headersSent) {
+    res.setHeader('X-CtrL-Mode', args.mode);
+    res.setHeader('X-Routed-Via', args.providerId);
+    res.setHeader('X-Fallback-Attempts', String(args.attempts));
+    if (args.meta) res.setHeader('X-Ctrl-Meta-Model', META_MODEL_ID);
+    if (args.vision) res.setHeader('X-Ctrl-Vision', '1');
+    setRtkHeaders(res, args.rtkStats ?? null, false);
+    setGuardrailHeaders(res, args.guardReport ?? null, false);
+  }
+}
+
+function extractUsage(
+  body: unknown,
+  messages: Array<{ role?: string; content?: unknown }>
+): TokenUsage {
+  const fromBody =
+    body && typeof body === 'object' && 'usage' in body
+      ? (body as { usage?: TokenUsage }).usage
+      : undefined;
+  if (fromBody && (fromBody.prompt_tokens || fromBody.completion_tokens)) return fromBody;
+
+  let completionChars = 64;
+  try {
+    const choices = (body as { choices?: Array<{ message?: { content?: string } }> })?.choices;
+    completionChars = String(choices?.[0]?.message?.content ?? '').length || 64;
+  } catch {
+    // ignore
+  }
+  return {
+    prompt_tokens: estimatePromptTokensWithVision(
+      messages.map((m) => ({ role: m.role ?? 'user', content: m.content ?? '' }))
+    ),
+    completion_tokens: Math.max(1, Math.ceil(completionChars / 4)),
+  };
+}

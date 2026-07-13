@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Helmora AI Models</title>
+  <link rel="stylesheet" href="/public/admin.css" />
+</head>
+<body>
+  <main>
+    <h1>Models <span class="pill off" id="activePill">…</span></h1>
+    <p class="sub" id="pageSub">Loading…</p>
+    <nav class="topnav" aria-label="Admin pages">
+      <a href="/settings">Settings</a>
+      <a href="/providers">Providers</a>
+      <a class="active" href="/models">Models</a>
+    </nav>
+
+    <form id="setupForm" class="card" hidden>
+      <h2>Create admin password</h2>
+      <p class="hint">First-time setup. Same password as Settings.</p>
+      <label class="field">
+        <span>Admin password <small>(min 8 chars)</small></span>
+        <input type="password" name="password" minlength="8" required autocomplete="new-password" />
+      </label>
+      <label class="field">
+        <span>Confirm password</span>
+        <input type="password" name="password2" minlength="8" required autocomplete="new-password" />
+      </label>
+      <div class="row"><button type="submit">Create &amp; continue</button></div>
+      <div class="status" id="setupStatus" role="status"></div>
+    </form>
+
+    <form id="loginForm" class="card" hidden>
+      <h2>Admin login</h2>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" required autocomplete="current-password" />
+      </label>
+      <div class="row"><button type="submit">Log in</button></div>
+      <div class="status" id="loginStatus" role="status"></div>
+    </form>
+
+    <div id="appPanel" hidden>
+      <div class="card">
+        <h2>Model catalog <span class="pill off" id="modelsPill">…</span></h2>
+        <p class="hint">
+          Hub meta models, agent pins, and provider default / benchmark models.
+          Enabled providers feed <code>/v1/models</code> and failover.
+        </p>
+        <div class="prov-filters">
+          <select id="modelFilterKind">
+            <option value="">All kinds</option>
+            <option value="meta">Meta</option>
+            <option value="provider">Provider</option>
+            <option value="agent">Agent</option>
+          </select>
+          <select id="modelFilterLive">
+            <option value="">All</option>
+            <option value="1">Routable now</option>
+            <option value="0">Not enabled</option>
+          </select>
+          <input type="text" id="modelFilterQ" placeholder="Search model / provider" />
+        </div>
+        <div id="modelsList"></div>
+        <div class="status" id="modelsStatus" role="status"></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const setupForm = document.getElementById('setupForm');
+    const loginForm = document.getElementById('loginForm');
+    const appPanel = document.getElementById('appPanel');
+    const pageSub = document.getElementById('pageSub');
+    const activePill = document.getElementById('activePill');
+    let modelsCache = [];
+
+    function escapeHtml(s) {
+      return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function showGate(mode) {
+      setupForm.hidden = mode !== 'setup';
+      loginForm.hidden = mode !== 'login';
+      appPanel.hidden = mode !== 'app';
+      if (mode === 'setup') {
+        pageSub.textContent = 'Create an admin password to browse models.';
+        activePill.textContent = 'setup';
+        activePill.className = 'pill warn';
+      } else if (mode === 'login') {
+        pageSub.textContent = 'Log in to browse models.';
+        activePill.textContent = 'locked';
+        activePill.className = 'pill warn';
+      } else {
+        pageSub.textContent = 'Browse hub + provider models.';
+        activePill.textContent = 'models';
+        activePill.className = 'pill';
+      }
+    }
+
+    function renderModels() {
+      const list = document.getElementById('modelsList');
+      const kind = document.getElementById('modelFilterKind').value;
+      const live = document.getElementById('modelFilterLive').value;
+      const q = (document.getElementById('modelFilterQ').value || '').toLowerCase().trim();
+      const filtered = modelsCache.filter((m) => {
+        if (kind && m.kind !== kind) return false;
+        if (live === '1' && !m.routable) return false;
+        if (live === '0' && m.routable) return false;
+        if (
+          q &&
+          !(m.id + ' ' + (m.providerId || '') + ' ' + (m.providerLabel || ''))
+            .toLowerCase()
+            .includes(q)
+        ) {
+          return false;
+        }
+        return true;
+      });
+      document.getElementById('modelsPill').textContent =
+        filtered.length + '/' + modelsCache.length;
+      document.getElementById('modelsPill').className = 'pill';
+      list.innerHTML =
+        '<table class="prov-table"><thead><tr>' +
+        '<th>Model</th><th>Provider</th><th>Kind</th><th>Status</th></tr></thead><tbody>' +
+        filtered
+          .map((m) => {
+            const chip = m.routable
+              ? '<span class="chip ok">routable</span>'
+              : m.catalogReady === false
+                ? '<span class="chip warn">stub</span>'
+                : '<span class="chip">idle</span>';
+            return (
+              '<tr><td><code>' +
+              escapeHtml(m.id) +
+              '</code></td><td>' +
+              escapeHtml(m.providerLabel || m.providerId || '—') +
+              (m.providerId ? '<br><code>' + escapeHtml(m.providerId) + '</code>' : '') +
+              '</td><td>' +
+              escapeHtml(m.kind) +
+              (m.tier != null ? ' · T' + m.tier : '') +
+              '</td><td>' +
+              chip +
+              '</td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table>';
+    }
+
+    async function loadModels() {
+      const res = await fetch('/api/models', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load models');
+      modelsCache = data.models || [];
+      renderModels();
+    }
+
+    ['modelFilterKind', 'modelFilterLive', 'modelFilterQ'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('input', renderModels);
+        el.addEventListener('change', renderModels);
+      }
+    });
+
+    setupForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(setupForm);
+      const password = String(fd.get('password') || '');
+      const password2 = String(fd.get('password2') || '');
+      const st = document.getElementById('setupStatus');
+      if (password !== password2) {
+        st.textContent = 'Passwords do not match';
+        st.className = 'status err';
+        return;
+      }
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        st.textContent = data.error?.message || data.error || 'Setup failed';
+        st.className = 'status err';
+        return;
+      }
+      await boot();
+    });
+
+    loginForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const password = String(new FormData(loginForm).get('password') || '');
+      const st = document.getElementById('loginStatus');
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        st.textContent = data.error?.message || data.error || 'Login failed';
+        st.className = 'status err';
+        return;
+      }
+      await boot();
+    });
+
+    async function boot() {
+      const res = await fetch('/api/auth/status', { credentials: 'include' });
+      const auth = await res.json();
+      if (!res.ok) throw new Error(auth.error?.message || 'Auth status failed');
+      if (auth.setupRequired) {
+        showGate('setup');
+        return;
+      }
+      if (!auth.authenticated) {
+        showGate('login');
+        return;
+      }
+      showGate('app');
+      await loadModels();
+    }
+
+    boot().catch((err) => {
+      pageSub.textContent = err instanceof Error ? err.message : String(err);
+      activePill.textContent = 'error';
+      activePill.className = 'pill warn';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+[Unit]
+Description=Helmora AI Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=helmora
+WorkingDirectory=/opt/helmora
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=20800
+Environment=HELMORA_PUBLIC=1
+Environment=DATA_DIR=/opt/helmora/data
+EnvironmentFile=-/opt/helmora/.env
+ExecStart=/usr/bin/node /opt/helmora/dist/index.js
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

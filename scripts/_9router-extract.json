@@ -1,0 +1,1479 @@
+[
+  {
+    "id": "alicode-intl",
+    "name": "Alibaba Intl",
+    "category": "apikey",
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "qwen3.5-plus",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "alicode-intl.js"
+  },
+  {
+    "id": "alicode",
+    "name": "Alibaba",
+    "category": "apikey",
+    "baseUrl": "https://coding.dashscope.aliyuncs.com/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "qwen3.5-plus",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "alicode.js"
+  },
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "category": "apikey",
+    "baseUrl": "https://api.anthropic.com/v1/messages",
+    "kinds": [
+      "llm",
+      "imageToText"
+    ],
+    "defaultModel": "claude-sonnet-4-20250514",
+    "format": "claude",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "anthropic.js"
+  },
+  {
+    "id": "antigravity",
+    "name": "Antigravity",
+    "category": "oauth",
+    "baseUrl": null,
+    "kinds": [
+      "llm",
+      "image"
+    ],
+    "defaultModel": "gemini-3-flash-agent",
+    "format": "antigravity",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "antigravity.js"
+  },
+  {
+    "id": "assemblyai",
+    "name": "AssemblyAI",
+    "category": "apikey",
+    "baseUrl": "https://api.assemblyai.com/v1/audio/transcriptions",
+    "kinds": [
+      "stt"
+    ],
+    "defaultModel": "universal-3-pro",
+    "format": "assemblyai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "assemblyai.js"
+  },
+  {
+    "id": "aws-polly",
+    "name": "AWS Polly",
+    "category": "apikey",
+    "baseUrl": "https://polly.{region}.amazonaws.com/v1/speech",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "standard",
+    "format": "aws-polly",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "aws-polly.js"
+  },
+  {
+    "id": "azure",
+    "name": "Azure OpenAI",
+    "category": "apikey",
+    "baseUrl": null,
+    "kinds": [],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "azure.js"
+  },
+  {
+    "id": "black-forest-labs",
+    "name": "Black Forest Labs",
+    "category": "apikey",
+    "baseUrl": "https://api.bfl.ai/v1",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "flux-pro-1.1",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "black-forest-labs.js"
+  },
+  {
+    "id": "blackbox",
+    "name": "Blackbox AI",
+    "category": "apikey",
+    "baseUrl": "https://api.blackbox.ai/v1/chat/completions",
+    "kinds": [
+      "llm"
+    ],
+    "defaultModel": "claude-fable-5",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "blackbox.js"
+  },
+  {
+    "id": "brave-search",
+    "name": "Brave Search",
+    "category": "apikey",
+    "baseUrl": "https://api.search.brave.com/res/v1",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "brave-search.js"
+  },
+  {
+    "id": "byteplus",
+    "name": "BytePlus ModelArk",
+    "category": "freeTier",
+    "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions",
+    "kinds": [
+      "llm"
+    ],
+    "defaultModel": "seed-2-0-pro-260328",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "byteplus.js"
+  },
+  {
+    "id": "cartesia",
+    "name": "Cartesia",
+    "category": "apikey",
+    "baseUrl": "https://api.cartesia.ai/tts/bytes",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "sonic-2",
+    "format": "cartesia",
+    "hasOauth": false,
+    "hidden": true,
+    "noAuth": false,
+    "file": "cartesia.js"
+  },
+  {
+    "id": "cerebras",
+    "name": "Cerebras",
+    "category": "apikey",
+    "baseUrl": "https://api.cerebras.ai/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "gpt-oss-120b",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "cerebras.js"
+  },
+  {
+    "id": "chutes",
+    "name": "Chutes AI",
+    "category": "apikey",
+    "baseUrl": "https://llm.chutes.ai/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "chutes.js"
+  },
+  {
+    "id": "claude",
+    "name": "Claude Code",
+    "category": "oauth",
+    "baseUrl": "https://api.anthropic.com/v1/messages",
+    "kinds": [],
+    "defaultModel": "claude-fable-5",
+    "format": "claude",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "claude.js"
+  },
+  {
+    "id": "cline",
+    "name": "Cline",
+    "category": "oauth",
+    "baseUrl": "https://api.cline.bot/api/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "anthropic/claude-opus-4.7",
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "cline.js"
+  },
+  {
+    "id": "clinepass",
+    "name": "ClinePass",
+    "category": "oauth",
+    "baseUrl": "https://api.cline.bot/api/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "cline-pass/glm-5.2",
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "clinepass.js"
+  },
+  {
+    "id": "cloudflare-ai",
+    "name": "Cloudflare",
+    "category": "freeTier",
+    "baseUrl": "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "image"
+    ],
+    "defaultModel": "@cf/meta/llama-3.2-1b-instruct",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "cloudflare-ai.js"
+  },
+  {
+    "id": "codebuddy-cn",
+    "name": "CodeBuddy CN",
+    "category": "oauth",
+    "baseUrl": "https://copilot.tencent.com/v2/chat/completions",
+    "kinds": [],
+    "defaultModel": "glm-5.2",
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "codebuddy-cn.js"
+  },
+  {
+    "id": "codex",
+    "name": "OpenAI Codex",
+    "category": "oauth",
+    "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
+    "kinds": [
+      "llm",
+      "image"
+    ],
+    "defaultModel": "gpt-5.6-sol",
+    "format": "openai-responses",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "codex.js"
+  },
+  {
+    "id": "cohere",
+    "name": "Cohere",
+    "category": "apikey",
+    "baseUrl": "https://api.cohere.ai/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "command-r-plus-08-2024",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "cohere.js"
+  },
+  {
+    "id": "comfyui",
+    "name": "ComfyUI",
+    "category": "apikey",
+    "baseUrl": "http://localhost:8188",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "flux-dev",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "comfyui.js"
+  },
+  {
+    "id": "commandcode",
+    "name": "Command Code",
+    "category": "apikey",
+    "baseUrl": "https://api.commandcode.ai/alpha/generate",
+    "kinds": [],
+    "defaultModel": "deepseek/deepseek-v4-pro",
+    "format": "commandcode",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "commandcode.js"
+  },
+  {
+    "id": "coqui",
+    "name": "Coqui TTS",
+    "category": "freeTier",
+    "baseUrl": "http://localhost:5002/api/tts",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "tts_models/en/ljspeech/tacotron2-DDC",
+    "format": "coqui",
+    "hasOauth": false,
+    "hidden": true,
+    "noAuth": true,
+    "file": "coqui.js"
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor IDE",
+    "category": "oauth",
+    "baseUrl": "https://api2.cursor.sh",
+    "kinds": [],
+    "defaultModel": "default",
+    "format": "cursor",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "cursor.js"
+  },
+  {
+    "id": "deepgram",
+    "name": "Deepgram",
+    "category": "apikey",
+    "baseUrl": "https://api.deepgram.com/v1/listen",
+    "kinds": [
+      "stt"
+    ],
+    "defaultModel": "nova-3",
+    "format": "deepgram",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "deepgram.js"
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "category": "apikey",
+    "baseUrl": "https://api.deepseek.com/chat/completions",
+    "kinds": [],
+    "defaultModel": "deepseek-v4-pro",
+    "format": "openai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "deepseek.js"
+  },
+  {
+    "id": "edge-tts",
+    "name": "Edge TTS",
+    "category": "freeTier",
+    "baseUrl": "edge-tts",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": null,
+    "format": "edge-tts",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "edge-tts.js"
+  },
+  {
+    "id": "elevenlabs",
+    "name": "ElevenLabs",
+    "category": "apikey",
+    "baseUrl": "https://api.elevenlabs.io/v1/text-to-speech",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "eleven_multilingual_v2",
+    "format": "elevenlabs",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "elevenlabs.js"
+  },
+  {
+    "id": "exa",
+    "name": "Exa",
+    "category": "apikey",
+    "baseUrl": "https://api.exa.ai/search",
+    "kinds": [
+      "webSearch",
+      "webFetch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "exa.js"
+  },
+  {
+    "id": "fal-ai",
+    "name": "Fal.ai",
+    "category": "apikey",
+    "baseUrl": "https://queue.fal.run",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "fal-ai/flux/schnell",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "fal-ai.js"
+  },
+  {
+    "id": "featherless",
+    "name": "Featherless",
+    "category": "apikey",
+    "baseUrl": "https://api.featherless.ai/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "deepseek-ai/DeepSeek-V4-Pro",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "featherless.js"
+  },
+  {
+    "id": "firecrawl",
+    "name": "Firecrawl",
+    "category": "apikey",
+    "baseUrl": "https://api.firecrawl.dev/v1/scrape",
+    "kinds": [
+      "webFetch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "firecrawl.js"
+  },
+  {
+    "id": "fireworks",
+    "name": "Fireworks AI",
+    "category": "apikey",
+    "baseUrl": "https://api.fireworks.ai/inference/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding"
+    ],
+    "defaultModel": "accounts/fireworks/models/deepseek-v3p1",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "fireworks.js"
+  },
+  {
+    "id": "gemini-cli",
+    "name": "Gemini CLI",
+    "category": "free",
+    "baseUrl": "https://cloudcode-pa.googleapis.com/v1internal",
+    "kinds": [],
+    "defaultModel": "gemini-3.1-pro-preview",
+    "format": "gemini-cli",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "gemini-cli.js"
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini",
+    "category": "freeTier",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta/models",
+    "kinds": [
+      "llm",
+      "embedding",
+      "image",
+      "imageToText",
+      "webSearch",
+      "tts",
+      "stt"
+    ],
+    "defaultModel": "gemini-3.1-pro-preview",
+    "format": "gemini",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "gemini.js"
+  },
+  {
+    "id": "github",
+    "name": "GitHub Copilot",
+    "category": "oauth",
+    "baseUrl": "https://api.githubcopilot.com/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding"
+    ],
+    "defaultModel": "gpt-5.2",
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "github.js"
+  },
+  {
+    "id": "gitlab",
+    "name": "GitLab Duo",
+    "category": "oauth",
+    "baseUrl": "https://gitlab.com/api/v4/chat/completions",
+    "kinds": [],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": true,
+    "hidden": true,
+    "noAuth": false,
+    "file": "gitlab.js"
+  },
+  {
+    "id": "glm-cn",
+    "name": "GLM (China)",
+    "category": "apikey",
+    "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+    "kinds": [],
+    "defaultModel": "glm-5.2",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "glm-cn.js"
+  },
+  {
+    "id": "glm",
+    "name": "GLM Coding",
+    "category": "apikey",
+    "baseUrl": "https://api.z.ai/api/anthropic/v1/messages",
+    "kinds": [],
+    "defaultModel": "glm-5.2",
+    "format": "claude",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "glm.js"
+  },
+  {
+    "id": "google-pse",
+    "name": "Google PSE",
+    "category": "apikey",
+    "baseUrl": "https://www.googleapis.com/customsearch/v1",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "google-pse.js"
+  },
+  {
+    "id": "google-tts",
+    "name": "Google TTS",
+    "category": "freeTier",
+    "baseUrl": "google-tts",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": null,
+    "format": "google-tts",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "google-tts.js"
+  },
+  {
+    "id": "grok-cli",
+    "name": "Grok CLI (Grok Build)",
+    "category": "oauth",
+    "baseUrl": "https://cli-chat-proxy.grok.com/v1/responses",
+    "kinds": [],
+    "defaultModel": "grok-4.5",
+    "format": "openai-responses",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "grok-cli.js"
+  },
+  {
+    "id": "grok-web",
+    "name": "Grok Web (Subscription)",
+    "category": "webCookie",
+    "baseUrl": "https://grok.com/rest/app-chat/conversations/new",
+    "kinds": [],
+    "defaultModel": "grok-3",
+    "format": "grok-web",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "grok-web.js"
+  },
+  {
+    "id": "groq",
+    "name": "Groq",
+    "category": "apikey",
+    "baseUrl": "https://api.groq.com/openai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "imageToText",
+      "stt"
+    ],
+    "defaultModel": "llama-3.3-70b-versatile",
+    "format": "openai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "groq.js"
+  },
+  {
+    "id": "huggingface",
+    "name": "HuggingFace",
+    "category": "apikey",
+    "baseUrl": "https://api-inference.huggingface.co/models",
+    "kinds": [
+      "image",
+      "stt"
+    ],
+    "defaultModel": "black-forest-labs/FLUX.1-schnell",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "huggingface.js"
+  },
+  {
+    "id": "hyperbolic",
+    "name": "Hyperbolic",
+    "category": "apikey",
+    "baseUrl": "https://api.hyperbolic.xyz/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "Qwen/QwQ-32B",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "hyperbolic.js"
+  },
+  {
+    "id": "iflow",
+    "name": "iFlow AI",
+    "category": "oauth",
+    "baseUrl": "https://apis.iflow.cn/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "qwen3-coder-plus",
+    "format": null,
+    "hasOauth": true,
+    "hidden": true,
+    "noAuth": false,
+    "file": "iflow.js"
+  },
+  {
+    "id": "inworld",
+    "name": "Inworld TTS",
+    "category": "apikey",
+    "baseUrl": "https://api.inworld.ai/tts/v1/voice",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "inworld-tts-1.5-mini",
+    "format": "inworld",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "inworld.js"
+  },
+  {
+    "id": "jina-ai",
+    "name": "Jina AI",
+    "category": "apikey",
+    "baseUrl": "https://api.jina.ai/v1/embeddings",
+    "kinds": [
+      "embedding"
+    ],
+    "defaultModel": "jina-embeddings-v3",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "jina-ai.js"
+  },
+  {
+    "id": "jina-reader",
+    "name": "Jina Reader",
+    "category": "apikey",
+    "baseUrl": "https://r.jina.ai",
+    "kinds": [
+      "webFetch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "jina-reader.js"
+  },
+  {
+    "id": "kilocode",
+    "name": "Kilo Code",
+    "category": "oauth",
+    "baseUrl": "https://api.kilo.ai/api/openrouter/chat/completions",
+    "kinds": [],
+    "defaultModel": "anthropic/claude-sonnet-4-20250514",
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "kilocode.js"
+  },
+  {
+    "id": "kimchi",
+    "name": "Kimchi",
+    "category": "oauth",
+    "baseUrl": "https://llm.kimchi.dev/openai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "imageToText"
+    ],
+    "defaultModel": "minimax-m3",
+    "format": "openai",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "kimchi.js"
+  },
+  {
+    "id": "kimi-coding",
+    "name": "Kimi Coding",
+    "category": "oauth",
+    "baseUrl": "https://api.kimi.com/coding/v1/messages",
+    "kinds": [],
+    "defaultModel": "kimi-k2.6",
+    "format": "claude",
+    "hasOauth": true,
+    "hidden": true,
+    "noAuth": false,
+    "file": "kimi-coding.js"
+  },
+  {
+    "id": "kimi",
+    "name": "Kimi",
+    "category": "apikey",
+    "baseUrl": "https://api.kimi.com/coding/v1/messages",
+    "kinds": [
+      "llm",
+      "webSearch"
+    ],
+    "defaultModel": "kimi-k2.6",
+    "format": "claude",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "kimi.js"
+  },
+  {
+    "id": "kiro",
+    "name": "Kiro AI",
+    "category": "free",
+    "baseUrl": "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+    "kinds": [],
+    "defaultModel": null,
+    "format": "kiro",
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "kiro.js"
+  },
+  {
+    "id": "linkup",
+    "name": "Linkup",
+    "category": "apikey",
+    "baseUrl": "https://api.linkup.so/v1/search",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "linkup.js"
+  },
+  {
+    "id": "local-device",
+    "name": "Local Device",
+    "category": "freeTier",
+    "baseUrl": "local-device",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": null,
+    "format": "local-device",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "local-device.js"
+  },
+  {
+    "id": "mimo-free",
+    "name": "MiMo Code Free",
+    "category": "free",
+    "baseUrl": "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+    "kinds": [],
+    "defaultModel": "mimo-auto",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "mimo-free.js"
+  },
+  {
+    "id": "minimax-cn",
+    "name": "Minimax (China)",
+    "category": "apikey",
+    "baseUrl": "https://api.minimaxi.com/anthropic/v1/messages",
+    "kinds": [
+      "llm",
+      "tts"
+    ],
+    "defaultModel": "MiniMax-M3",
+    "format": "claude",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "minimax-cn.js"
+  },
+  {
+    "id": "minimax",
+    "name": "Minimax Coding",
+    "category": "apikey",
+    "baseUrl": "https://api.minimax.io/anthropic/v1/messages",
+    "kinds": [
+      "llm",
+      "image",
+      "imageToText",
+      "webSearch",
+      "tts"
+    ],
+    "defaultModel": "MiniMax-M3",
+    "format": "claude",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "minimax.js"
+  },
+  {
+    "id": "mistral",
+    "name": "Mistral",
+    "category": "apikey",
+    "baseUrl": "https://api.mistral.ai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "imageToText",
+      "embedding"
+    ],
+    "defaultModel": "mistral-large-latest",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "mistral.js"
+  },
+  {
+    "id": "mmf",
+    "name": "MMF",
+    "category": "apikey",
+    "baseUrl": "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+    "kinds": [],
+    "defaultModel": "mimo-auto",
+    "format": null,
+    "hasOauth": false,
+    "hidden": true,
+    "noAuth": true,
+    "file": "mmf.js"
+  },
+  {
+    "id": "nanobanana",
+    "name": "NanoBanana API",
+    "category": "apikey",
+    "baseUrl": "https://api.nanobananaapi.ai/v1/chat/completions",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "nanobanana-flash",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "nanobanana.js"
+  },
+  {
+    "id": "nebius",
+    "name": "Nebius AI",
+    "category": "apikey",
+    "baseUrl": "https://api.studio.nebius.ai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding"
+    ],
+    "defaultModel": "meta-llama/Llama-3.3-70B-Instruct",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "nebius.js"
+  },
+  {
+    "id": "nvidia",
+    "name": "NVIDIA NIM",
+    "category": "freeTier",
+    "baseUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "tts",
+      "embedding"
+    ],
+    "defaultModel": "minimaxai/minimax-m2.7",
+    "format": "nvidia-tts",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "nvidia.js"
+  },
+  {
+    "id": "ollama-local",
+    "name": "Ollama Local",
+    "category": "apikey",
+    "baseUrl": "http://localhost:11434/api/chat",
+    "kinds": [
+      "llm"
+    ],
+    "defaultModel": null,
+    "format": "ollama",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "ollama-local.js"
+  },
+  {
+    "id": "ollama",
+    "name": "Ollama Cloud",
+    "category": "freeTier",
+    "baseUrl": "https://ollama.com/api/chat",
+    "kinds": [
+      "llm"
+    ],
+    "defaultModel": "gpt-oss:120b",
+    "format": "ollama",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "ollama.js"
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "category": "apikey",
+    "baseUrl": "https://api.openai.com/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding",
+      "tts",
+      "stt",
+      "image",
+      "imageToText",
+      "webSearch"
+    ],
+    "defaultModel": "gpt-5.4",
+    "format": "openai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "openai.js"
+  },
+  {
+    "id": "opencode-go",
+    "name": "OpenCode Go",
+    "category": "apikey",
+    "baseUrl": "https://opencode.ai/zen/go/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "glm-5.2",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "opencode-go.js"
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode Free",
+    "category": "free",
+    "baseUrl": "https://opencode.ai",
+    "kinds": [],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "opencode.js"
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "category": "freeTier",
+    "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding",
+      "tts",
+      "imageToText"
+    ],
+    "defaultModel": "openai/text-embedding-3-large",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "openrouter.js"
+  },
+  {
+    "id": "perplexity-agent",
+    "name": "Perplexity Agent",
+    "category": "apikey",
+    "baseUrl": "https://api.perplexity.ai/v1/responses",
+    "kinds": [
+      "llm",
+      "webSearch"
+    ],
+    "defaultModel": "perplexity/sonar",
+    "format": "openai-responses",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "perplexity-agent.js"
+  },
+  {
+    "id": "perplexity-web",
+    "name": "Perplexity Web (Pro/Max)",
+    "category": "webCookie",
+    "baseUrl": "https://www.perplexity.ai/rest/sse/perplexity_ask",
+    "kinds": [],
+    "defaultModel": "pplx-auto",
+    "format": "perplexity-web",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "perplexity-web.js"
+  },
+  {
+    "id": "perplexity",
+    "name": "Perplexity",
+    "category": "apikey",
+    "baseUrl": "https://api.perplexity.ai/chat/completions",
+    "kinds": [
+      "llm",
+      "webSearch"
+    ],
+    "defaultModel": "sonar-pro",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "perplexity.js"
+  },
+  {
+    "id": "playht",
+    "name": "PlayHT",
+    "category": "apikey",
+    "baseUrl": "https://api.play.ht/api/v2/tts/stream",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "PlayDialog",
+    "format": "playht",
+    "hasOauth": false,
+    "hidden": true,
+    "noAuth": false,
+    "file": "playht.js"
+  },
+  {
+    "id": "qoder",
+    "name": "Qoder",
+    "category": "free",
+    "baseUrl": "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+    "kinds": [],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": true,
+    "hidden": false,
+    "noAuth": false,
+    "file": "qoder.js"
+  },
+  {
+    "id": "qwen",
+    "name": "Qwen Code",
+    "category": "oauth",
+    "baseUrl": "https://portal.qwen.ai/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "qwen3-coder-plus",
+    "format": null,
+    "hasOauth": true,
+    "hidden": true,
+    "noAuth": false,
+    "file": "qwen.js"
+  },
+  {
+    "id": "recraft",
+    "name": "Recraft",
+    "category": "apikey",
+    "baseUrl": "https://external.api.recraft.ai/v1/images/generations",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "recraftv3",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "recraft.js"
+  },
+  {
+    "id": "runwayml",
+    "name": "Runway ML",
+    "category": "apikey",
+    "baseUrl": "https://api.dev.runwayml.com/v1",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "gen4_image",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "runwayml.js"
+  },
+  {
+    "id": "sdwebui",
+    "name": "SD WebUI",
+    "category": "apikey",
+    "baseUrl": "http://localhost:7860/sdapi/v1/txt2img",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "stable-diffusion-v1-5",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "sdwebui.js"
+  },
+  {
+    "id": "searchapi",
+    "name": "SearchAPI",
+    "category": "apikey",
+    "baseUrl": "https://www.searchapi.io/api/v1/search",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "searchapi.js"
+  },
+  {
+    "id": "searxng",
+    "name": "SearXNG",
+    "category": "freeTier",
+    "baseUrl": null,
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": true,
+    "file": "searxng.js"
+  },
+  {
+    "id": "serper",
+    "name": "Serper",
+    "category": "apikey",
+    "baseUrl": "https://google.serper.dev",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "serper.js"
+  },
+  {
+    "id": "siliconflow",
+    "name": "SiliconFlow",
+    "category": "apikey",
+    "baseUrl": "https://api.siliconflow.com/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "deepseek-ai/DeepSeek-V4-Pro",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "siliconflow.js"
+  },
+  {
+    "id": "stability-ai",
+    "name": "Stability AI",
+    "category": "apikey",
+    "baseUrl": "https://api.stability.ai/v2beta/stable-image/generate",
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": "stable-image-ultra",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "stability-ai.js"
+  },
+  {
+    "id": "tavily",
+    "name": "Tavily",
+    "category": "apikey",
+    "baseUrl": "https://api.tavily.com/search",
+    "kinds": [
+      "webSearch",
+      "webFetch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "tavily.js"
+  },
+  {
+    "id": "together",
+    "name": "Together AI",
+    "category": "apikey",
+    "baseUrl": "https://api.together.xyz/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding"
+    ],
+    "defaultModel": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "together.js"
+  },
+  {
+    "id": "topaz",
+    "name": "Topaz",
+    "category": "apikey",
+    "baseUrl": null,
+    "kinds": [
+      "image"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "topaz.js"
+  },
+  {
+    "id": "tortoise",
+    "name": "Tortoise TTS",
+    "category": "freeTier",
+    "baseUrl": "http://localhost:5000/api/tts",
+    "kinds": [
+      "tts"
+    ],
+    "defaultModel": "tortoise-v2",
+    "format": "tortoise",
+    "hasOauth": false,
+    "hidden": true,
+    "noAuth": true,
+    "file": "tortoise.js"
+  },
+  {
+    "id": "venice",
+    "name": "Venice AI",
+    "category": "apikey",
+    "baseUrl": "https://api.venice.ai/api/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding",
+      "image"
+    ],
+    "defaultModel": "venice-uncensored-1-2",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "venice.js"
+  },
+  {
+    "id": "vercel-ai-gateway",
+    "name": "Vercel AI Gateway",
+    "category": "apikey",
+    "baseUrl": "https://ai-gateway.vercel.sh/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "embedding",
+      "image",
+      "imageToText",
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "vercel-ai-gateway.js"
+  },
+  {
+    "id": "vertex-partner",
+    "name": "Vertex Partner",
+    "category": "apikey",
+    "baseUrl": "https://aiplatform.googleapis.com",
+    "kinds": [],
+    "defaultModel": "deepseek-ai/deepseek-v3.2-maas",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "vertex-partner.js"
+  },
+  {
+    "id": "vertex",
+    "name": "Vertex AI",
+    "category": "freeTier",
+    "baseUrl": "https://aiplatform.googleapis.com",
+    "kinds": [
+      "llm",
+      "imageToText"
+    ],
+    "defaultModel": "gemini-3.1-pro-preview",
+    "format": "vertex",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "vertex.js"
+  },
+  {
+    "id": "volcengine-ark",
+    "name": "Volcengine Ark",
+    "category": "apikey",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+    "kinds": [],
+    "defaultModel": "Doubao-Seed-2.0-Code",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "volcengine-ark.js"
+  },
+  {
+    "id": "voyage-ai",
+    "name": "Voyage AI",
+    "category": "apikey",
+    "baseUrl": "https://api.voyageai.com/v1/embeddings",
+    "kinds": [
+      "embedding"
+    ],
+    "defaultModel": "voyage-3-large",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "voyage-ai.js"
+  },
+  {
+    "id": "xai",
+    "name": "xAI (Grok)",
+    "category": "oauth",
+    "baseUrl": "https://api.x.ai/v1/chat/completions",
+    "kinds": [
+      "llm",
+      "imageToText",
+      "webSearch",
+      "image"
+    ],
+    "defaultModel": "grok-4",
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "xai.js"
+  },
+  {
+    "id": "xiaomi-mimo",
+    "name": "Xiaomi MiMo",
+    "category": "apikey",
+    "baseUrl": "https://api.xiaomimimo.com/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "mimo-v2.5-pro",
+    "format": "openai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "xiaomi-mimo.js"
+  },
+  {
+    "id": "xiaomi-tokenplan",
+    "name": "Xiaomi MiMo (Token Plan)",
+    "category": "apikey",
+    "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+    "kinds": [],
+    "defaultModel": "mimo-v2.5-pro",
+    "format": "openai",
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "xiaomi-tokenplan.js"
+  },
+  {
+    "id": "youcom",
+    "name": "You.com Search",
+    "category": "apikey",
+    "baseUrl": "https://ydc-index.io/v1/search",
+    "kinds": [
+      "webSearch"
+    ],
+    "defaultModel": null,
+    "format": null,
+    "hasOauth": false,
+    "hidden": false,
+    "noAuth": false,
+    "file": "youcom.js"
+  }
+]

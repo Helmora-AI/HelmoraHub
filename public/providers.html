@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Helmora AI Providers</title>
+  <link rel="stylesheet" href="/public/admin.css" />
+</head>
+<body>
+  <main>
+    <h1>Providers <span class="pill off" id="activePill">…</span></h1>
+    <p class="sub" id="pageSub">Loading…</p>
+    <nav class="topnav" aria-label="Admin pages">
+      <a href="/settings">Settings</a>
+      <a class="active" href="/providers">Providers</a>
+      <a href="/models">Models</a>
+    </nav>
+
+    <form id="setupForm" class="card" hidden>
+      <h2>Create admin password</h2>
+      <p class="hint">First-time setup. Same password as Settings.</p>
+      <label class="field">
+        <span>Admin password <small>(min 8 chars)</small></span>
+        <input type="password" name="password" minlength="8" required autocomplete="new-password" />
+      </label>
+      <label class="field">
+        <span>Confirm password</span>
+        <input type="password" name="password2" minlength="8" required autocomplete="new-password" />
+      </label>
+      <div class="row"><button type="submit">Create &amp; continue</button></div>
+      <div class="status" id="setupStatus" role="status"></div>
+      <div class="token-box" id="setupTokenBox" hidden></div>
+    </form>
+
+    <form id="loginForm" class="card" hidden>
+      <h2>Admin login</h2>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" required autocomplete="current-password" />
+      </label>
+      <div class="row"><button type="submit">Log in</button></div>
+      <div class="status" id="loginStatus" role="status"></div>
+    </form>
+
+    <div id="appPanel" hidden>
+      <div class="card" id="providersCard">
+        <h2>Catalog <span class="pill off" id="providersPill">…</span></h2>
+        <p class="hint">
+          FreeLLMAPI + 9Router + AIMLAPI. Pick <strong>T3 Free</strong> when testing free pools,
+          then Verify with a benchmark model. Ready OAuth (Kimchi, xAI, Qwen, iFlow, Kilo, Cline…):
+          paste access token — not a cookie. Other OAuth/cookie/media stay off until adapters ship.
+        </p>
+        <div class="prov-filters">
+          <select id="provFilterTier">
+            <option value="">All tiers</option>
+            <option value="1">T1 subscription</option>
+            <option value="2">T2 paid</option>
+            <option value="3">T3 free</option>
+          </select>
+          <select id="provFilterReady">
+            <option value="">All ready</option>
+            <option value="1">Ready only</option>
+            <option value="0">Not ready</option>
+          </select>
+          <select id="provFilterStatus">
+            <option value="">All status</option>
+            <option value="ok">Verified</option>
+            <option value="fail">Failed</option>
+            <option value="unsupported">Unsupported</option>
+            <option value="never">Never</option>
+            <option value="on">Enabled</option>
+          </select>
+          <input type="text" id="provFilterQ" placeholder="Search id / label" />
+        </div>
+        <div id="providersList"></div>
+        <div class="status" id="providersStatus" role="status"></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const setupForm = document.getElementById('setupForm');
+    const loginForm = document.getElementById('loginForm');
+    const appPanel = document.getElementById('appPanel');
+    const pageSub = document.getElementById('pageSub');
+    const activePill = document.getElementById('activePill');
+    let providersCache = [];
+
+    function escapeHtml(s) {
+      return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function showGate(mode) {
+      setupForm.hidden = mode !== 'setup';
+      loginForm.hidden = mode !== 'login';
+      appPanel.hidden = mode !== 'app';
+      if (mode === 'setup') {
+        pageSub.textContent = 'Create an admin password to manage providers.';
+        activePill.textContent = 'setup';
+        activePill.className = 'pill warn';
+      } else if (mode === 'login') {
+        pageSub.textContent = 'Log in to manage providers.';
+        activePill.textContent = 'locked';
+        activePill.className = 'pill warn';
+      } else {
+        pageSub.textContent = 'Verify & enable upstream providers for /v1 failover.';
+        activePill.textContent = 'providers';
+        activePill.className = 'pill';
+      }
+    }
+
+    function providerChip(p) {
+      if (p.enabled && p.verifyStatus === 'ok') return '<span class="chip ok">on</span>';
+      if (p.verifyStatus === 'ok') return '<span class="chip ok">verified</span>';
+      if (p.verifyStatus === 'fail') return '<span class="chip fail">fail</span>';
+      if (p.verifyStatus === 'unsupported') return '<span class="chip warn">n/a</span>';
+      return '<span class="chip">off</span>';
+    }
+
+    function renderProviders() {
+      const list = document.getElementById('providersList');
+      const tier = document.getElementById('provFilterTier').value;
+      const ready = document.getElementById('provFilterReady').value;
+      const status = document.getElementById('provFilterStatus').value;
+      const q = (document.getElementById('provFilterQ').value || '').toLowerCase().trim();
+      const filtered = providersCache.filter((p) => {
+        if (tier && String(p.tier) !== tier) return false;
+        if (ready === '1' && !p.catalogReady) return false;
+        if (ready === '0' && p.catalogReady) return false;
+        if (status === 'on' && !p.enabled) return false;
+        if (status && status !== 'on' && p.verifyStatus !== status) return false;
+        if (q && !(p.id + ' ' + p.label).toLowerCase().includes(q)) return false;
+        return true;
+      });
+      document.getElementById('providersPill').textContent =
+        filtered.length + '/' + providersCache.length;
+      document.getElementById('providersPill').className = 'pill';
+      list.innerHTML =
+        '<table class="prov-table"><thead><tr>' +
+        '<th>Provider</th><th>Tier</th><th>Protocol</th><th>Status</th></tr></thead><tbody>' +
+        filtered
+          .map((p) => {
+            const note = p.verifyError
+              ? '<div class="note-err">' + escapeHtml(p.verifyError) + '</div>'
+              : '';
+            return (
+              '<tr class="prov-row" data-id="' + escapeHtml(p.id) + '"><td><strong>' +
+              escapeHtml(p.label) + '</strong><br><code>' + escapeHtml(p.id) +
+              '</code></td><td>T' + p.tier + '</td><td>' + escapeHtml(p.protocol) +
+              (p.catalogReady ? '' : ' · stub') + '</td><td>' + providerChip(p) + note +
+              '</td></tr><tr><td colspan="4"><div class="prov-detail" data-detail="' +
+              escapeHtml(p.id) + '">' +
+              '<label class="field"><span>Tier (failover pool)</span>' +
+              '<select data-field="tier" data-id="' + escapeHtml(p.id) + '">' +
+              '<option value="3"' + (p.tier === 3 ? ' selected' : '') +
+              '>T3 — Free / trial (recommended for testing)</option>' +
+              '<option value="2"' + (p.tier === 2 ? ' selected' : '') +
+              '>T2 — Paid upstream</option>' +
+              '<option value="1"' + (p.tier === 1 ? ' selected' : '') +
+              '>T1 — Subscription</option>' +
+              '</select></label>' +
+              '<label class="field"><span>' +
+              (p.protocol === 'oauth' && p.catalogReady
+                ? 'Access token <small>(paste Bearer token — not cookie; leave blank to keep ' +
+                  escapeHtml(p.apiKey || 'empty') + ')</small>'
+                : 'API key <small>(leave blank to keep ' +
+                  escapeHtml(p.apiKey || 'empty') + ')</small>') +
+              '</span>' +
+              '<input type="password" data-field="apiKey" data-id="' + escapeHtml(p.id) +
+              '" autocomplete="off" /></label>' +
+              '<label class="field"><span>Base URL</span>' +
+              '<input type="text" data-field="baseUrl" data-id="' + escapeHtml(p.id) +
+              '" value="' + escapeHtml(p.baseUrl || '') + '" /></label>' +
+              '<label class="field"><span>Benchmark model</span>' +
+              '<input type="text" data-field="benchmarkModel" data-id="' + escapeHtml(p.id) +
+              '" value="' + escapeHtml(p.benchmarkModel || p.defaultModel || '') + '" /></label>' +
+              '<div class="row">' +
+              '<button type="button" data-action="verify" data-id="' + escapeHtml(p.id) +
+              '">Verify &amp; Enable</button>' +
+              '<button type="button" class="danger" data-action="disable" data-id="' +
+              escapeHtml(p.id) + '">Disable</button></div></div></td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table>';
+
+      list.querySelectorAll('.prov-row').forEach((row) => {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => {
+          const id = row.getAttribute('data-id');
+          const detail = list.querySelector('[data-detail="' + id + '"]');
+          if (!detail) return;
+          detail.classList.toggle('open');
+          row.classList.toggle('expanded', detail.classList.contains('open'));
+        });
+      });
+      list.querySelectorAll('[data-action="verify"]').forEach((btn) => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          await verifyProvider(btn.getAttribute('data-id'));
+        });
+      });
+      list.querySelectorAll('[data-action="disable"]').forEach((btn) => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          await disableProvider(btn.getAttribute('data-id'));
+        });
+      });
+    }
+
+    function readProvFields(id) {
+      const apiKeyEl = document.querySelector('input[data-field="apiKey"][data-id="' + id + '"]');
+      const baseUrlEl = document.querySelector('input[data-field="baseUrl"][data-id="' + id + '"]');
+      const modelEl = document.querySelector('input[data-field="benchmarkModel"][data-id="' + id + '"]');
+      const tierEl = document.querySelector('select[data-field="tier"][data-id="' + id + '"]');
+      const body = {};
+      if (apiKeyEl && apiKeyEl.value.trim()) body.apiKey = apiKeyEl.value.trim();
+      if (baseUrlEl) body.baseUrl = baseUrlEl.value.trim() || null;
+      if (modelEl && modelEl.value.trim()) body.benchmarkModel = modelEl.value.trim();
+      if (tierEl && tierEl.value) body.tier = Number(tierEl.value);
+      return body;
+    }
+
+    async function loadProviders() {
+      const res = await fetch('/api/toggles', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load providers');
+      providersCache = data.providers || [];
+      renderProviders();
+    }
+
+    async function verifyProvider(id) {
+      const el = document.getElementById('providersStatus');
+      el.textContent = 'Verifying ' + id + '…';
+      el.className = 'status';
+      const res = await fetch('/api/toggles/' + encodeURIComponent(id) + '/verify', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(readProvFields(id)),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        el.textContent = id + ' verified (' + data.latencyMs + 'ms)';
+        el.className = 'status ok';
+      } else {
+        el.textContent = id + ': ' + (data.verifyError || data.error || 'verify failed');
+        el.className = 'status err';
+      }
+      await loadProviders();
+    }
+
+    async function disableProvider(id) {
+      const res = await fetch('/api/toggles/' + encodeURIComponent(id) + '/disable', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      const el = document.getElementById('providersStatus');
+      if (!res.ok) {
+        el.textContent = data.error?.message || data.error || 'Disable failed';
+        el.className = 'status err';
+        return;
+      }
+      el.textContent = id + ' disabled';
+      el.className = 'status ok';
+      await loadProviders();
+    }
+
+    ['provFilterTier', 'provFilterReady', 'provFilterStatus', 'provFilterQ'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('input', renderProviders);
+        el.addEventListener('change', renderProviders);
+      }
+    });
+
+    setupForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(setupForm);
+      const password = String(fd.get('password') || '');
+      const password2 = String(fd.get('password2') || '');
+      const st = document.getElementById('setupStatus');
+      if (password !== password2) {
+        st.textContent = 'Passwords do not match';
+        st.className = 'status err';
+        return;
+      }
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        st.textContent = data.error?.message || data.error || 'Setup failed';
+        st.className = 'status err';
+        return;
+      }
+      if (data.adminToken) {
+        const box = document.getElementById('setupTokenBox');
+        box.hidden = false;
+        box.textContent = 'Admin token (save once): ' + data.adminToken;
+      }
+      await boot();
+    });
+
+    loginForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const password = String(new FormData(loginForm).get('password') || '');
+      const st = document.getElementById('loginStatus');
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        st.textContent = data.error?.message || data.error || 'Login failed';
+        st.className = 'status err';
+        return;
+      }
+      await boot();
+    });
+
+    async function boot() {
+      const res = await fetch('/api/auth/status', { credentials: 'include' });
+      const auth = await res.json();
+      if (!res.ok) throw new Error(auth.error?.message || 'Auth status failed');
+      if (auth.setupRequired) {
+        showGate('setup');
+        return;
+      }
+      if (!auth.authenticated) {
+        showGate('login');
+        return;
+      }
+      showGate('app');
+      await loadProviders();
+    }
+
+    boot().catch((err) => {
+      pageSub.textContent = err instanceof Error ? err.message : String(err);
+      activePill.textContent = 'error';
+      activePill.className = 'pill warn';
+    });
+  </script>
+</body>
+</html>

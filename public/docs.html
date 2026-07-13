@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Helmora AI API Docs</title>
+  <link rel="icon" href="/public/logo/helmora_logo_white.svg" />
+  <style>
+    :root {
+      --bg: #0e1114;
+      --surface: #161b20;
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #e8ecef;
+      --muted: #93a0ab;
+      --accent: #2dd4bf;
+      --code-bg: #0a0d10;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2a2e 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      max-width: 1100px;
+      margin: 0 auto;
+      min-height: 100vh;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow: auto;
+      padding: 1.5rem 1rem;
+      border-right: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface) 80%, transparent);
+    }
+    nav .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.25rem;
+    }
+    nav .brand img { width: 28px; height: 28px; }
+    nav a.toc {
+      display: block;
+      color: var(--muted);
+      padding: 0.35rem 0.4rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    nav a.toc:hover { background: rgba(255,255,255,0.04); color: var(--text); text-decoration: none; }
+    main { padding: 2rem 1.75rem 4rem; }
+    h1 { font-size: 1.85rem; margin: 0 0 0.35rem; letter-spacing: -0.03em; }
+    h2 {
+      font-size: 1.25rem;
+      margin: 2.25rem 0 0.75rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+    }
+    h3 { font-size: 1.05rem; margin: 1.35rem 0 0.5rem; }
+    p, li { color: color-mix(in srgb, var(--text) 92%, var(--muted)); }
+    .lede { color: var(--muted); max-width: 62ch; }
+    .pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-right: 0.35rem;
+    }
+    .pill.ok { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.75rem 0 1rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.55rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 500; }
+    code, .mono {
+      font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.86em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+      overflow: auto;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .note {
+      border-left: 3px solid var(--accent);
+      padding: 0.55rem 0.85rem;
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .warn {
+      border-left-color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 10%, transparent);
+    }
+    footer {
+      margin-top: 3rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 860px) {
+      .wrap { grid-template-columns: 1fr; }
+      nav {
+        position: relative;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <div class="brand">
+        <img src="/public/logo/helmora_logo_white.svg" alt="" />
+        <span>Helmora AI Docs</span>
+      </div>
+      <a class="toc" href="#overview">Overview</a>
+      <a class="toc" href="#auth">Authentication</a>
+      <a class="toc" href="#models">Models</a>
+      <a class="toc" href="#chat">Chat completions</a>
+      <a class="toc" href="#stream">Streaming (SSE)</a>
+      <a class="toc" href="#embeddings">Embeddings</a>
+      <a class="toc" href="#errors">Errors</a>
+      <a class="toc" href="#billing">Usage &amp; billing</a>
+      <a class="toc" href="#examples">Examples</a>
+      <a class="toc" href="#limits">Limits &amp; tips</a>
+      <a class="toc" href="/docs.json">docs.json</a>
+    </nav>
+    <main>
+      <p><span class="pill ok">Public</span><span class="pill">OpenAI-compatible</span><span class="pill">No login required</span></p>
+      <h1 id="overview">Helmora AI HTTP API</h1>
+      <p class="lede">
+        Helmora AI exposes an OpenAI-compatible <code>/v1</code> surface for tools and apps.
+        Issue a <code>hel_dev_</code> or <code>hel_pro_</code> key in the admin SPA
+        (<strong>Operate → API Keys</strong>), then call the endpoints below.
+      </p>
+      <div class="note">
+        The admin <strong>Playground</strong> uses a separate session path
+        (<code>/api/chat/completions</code> and does <em>not</em> consume these API keys.
+      </div>
+
+      <h3>Base URL</h3>
+      <p>Use your Hub origin, for example:</p>
+      <pre>http://127.0.0.1:20800</pre>
+      <p>All paths in this document are relative to that origin.</p>
+
+      <h3>Quick map</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/health</code></td><td>none</td><td>Liveness</td></tr>
+          <tr><td>GET</td><td><code>/docs</code></td><td>none</td><td>This page</td></tr>
+          <tr><td>GET</td><td><code>/docs.json</code></td><td>none</td><td>Machine-readable catalog</td></tr>
+          <tr><td>GET</td><td><code>/v1/models</code></td><td>API key</td><td>List models</td></tr>
+          <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>API key</td><td>Chat (JSON or SSE)</td></tr>
+          <tr><td>POST</td><td><code>/v1/embeddings</code></td><td>API key</td><td>Embeddings</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="auth">Authentication</h2>
+      <p>Every <code>/v1/*</code> request requires a Hub API key.</p>
+      <h3>Headers</h3>
+      <pre>Authorization: Bearer hel_dev_…yourkey…
+# or
+x-api-key: hel_dev_…yourkey…</pre>
+      <h3>Key types</h3>
+      <table>
+        <thead><tr><th>Prefix</th><th>Env</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>hel_dev_</code></td><td>dev</td><td>Local / staging tools</td></tr>
+          <tr><td><code>hel_pro_</code></td><td>pro</td><td>Production integrations</td></tr>
+        </tbody>
+      </table>
+      <p>Keys may have an optional USD budget and expiry. Plaintext is shown <strong>once</strong> at creation.</p>
+      <div class="note warn">Never embed API keys in public frontends. Prefer server-side proxies.</div>
+
+      <h2 id="models">GET /v1/models</h2>
+      <p>Returns OpenAI-style <code>{ object: "list", data: [...] }</code>.</p>
+      <p>Includes meta ids such as <code>auto</code>, <code>mode/smart</code>, provider default models, agents, and embedding placeholders (e.g. <code>text-embedding-3-small</code>).</p>
+      <pre>curl -s http://127.0.0.1:20800/v1/models \
+  -H "Authorization: Bearer $HELMORA_KEY"</pre>
+
+      <h2 id="chat">POST /v1/chat/completions</h2>
+      <p>Standard chat completions. Same auth as above.</p>
+      <h3>Request body (common fields)</h3>
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>model</code></td><td>string</td><td><code>auto</code>, <code>mode/&lt;hubMode&gt;</code>, upstream id, or <code>agent/&lt;id&gt;</code></td></tr>
+          <tr><td><code>messages</code></td><td>array</td><td>OpenAI message objects (<code>role</code> + <code>content</code>)</td></tr>
+          <tr><td><code>stream</code></td><td>boolean</td><td><code>true</code> → SSE (see Streaming)</td></tr>
+          <tr><td><code>temperature</code></td><td>number</td><td>Optional</td></tr>
+          <tr><td><code>max_tokens</code></td><td>number</td><td>Optional</td></tr>
+          <tr><td><code>images</code></td><td>string[]</td><td>Optional helper; merged into last user message</td></tr>
+        </tbody>
+      </table>
+      <h3>Useful model refs</h3>
+      <ul>
+        <li><code>auto</code> — tier router / active Hub mode</li>
+        <li><code>mode/smart</code>, <code>mode/coding</code>, … — force a Hub mode</li>
+        <li>Provider default model ids from enabled, verified providers</li>
+      </ul>
+      <h3>Response headers (selected)</h3>
+      <table>
+        <thead><tr><th>Header</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>X-Routed-Via</code></td><td>Provider id that served the request</td></tr>
+          <tr><td><code>X-CtrL-Mode</code></td><td>Resolved Hub mode</td></tr>
+          <tr><td><code>X-Ctrl-Cost</code> / <code>X-Ctrl-Spent</code></td><td>Estimated cost and key spend</td></tr>
+          <tr><td><code>X-Ctrl-Key-Env</code></td><td><code>dev</code> or <code>pro</code></td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="stream">Streaming (SSE)</h2>
+      <p>Set <code>"stream": true</code>. Response:</p>
+      <ul>
+        <li><code>Content-Type: text/event-stream</code></li>
+        <li>Frames: <code>data: {…chat.completion.chunk…}</code></li>
+        <li>End: <code>data: [DONE]</code></li>
+      </ul>
+      <div class="note">Admin Playground uses an enriched SSE contract (<code>event: metadata</code>). The public <code>/v1</code> stream matches classic OpenAI chunk frames.</div>
+
+      <h2 id="embeddings">POST /v1/embeddings</h2>
+      <p>OpenAI-compatible embeddings.</p>
+      <h3>Request</h3>
+      <pre>{
+  "model": "text-embedding-3-small",
+  "input": "hello world"
+}</pre>
+      <p><code>input</code> may be a string or an array of up to <strong>64</strong> strings. <code>encoding_format</code> must be <code>float</code> (default). Optional <code>dimensions</code> is forwarded when the upstream supports it.</p>
+      <h3>Routing</h3>
+      <ol>
+        <li>Try enabled OpenAI-compatible providers (<code>/embeddings</code> on their <code>baseUrl</code>).</li>
+        <li>If none succeed, return deterministic <strong>demo</strong> vectors so smoke tests and offline Hub still work.</li>
+      </ol>
+      <h3>Response shape</h3>
+      <pre>{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [/* floats */] }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": { "prompt_tokens": 3, "total_tokens": 3 }
+}</pre>
+
+      <h2 id="errors">Errors</h2>
+      <table>
+        <thead><tr><th>HTTP</th><th>type (typical)</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td>401</td><td><code>invalid_api_key</code> / <code>api_key_expired</code></td><td>Missing, wrong, disabled, or expired key</td></tr>
+          <tr><td>429</td><td><code>insufficient_quota</code></td><td>Key budget exceeded</td></tr>
+          <tr><td>400</td><td><code>invalid_request_error</code></td><td>Bad body / validation</td></tr>
+          <tr><td>502 / 503</td><td>upstream / no providers</td><td>Upstream failure or nothing routable</td></tr>
+        </tbody>
+      </table>
+      <p>Error bodies follow <code>{ "error": { "message": "…", "type": "…" } }</code>.</p>
+
+      <h2 id="billing">Usage &amp; billing</h2>
+      <ul>
+        <li><code>/v1</code> traffic increments the API key’s <code>spentUsd</code> and writes usage events with <code>source: "api"</code>.</li>
+        <li>Playground traffic is metered as <code>source: "admin_chat"</code> and does <strong>not</strong> increase key spend.</li>
+        <li>Inspect rollups in the admin SPA under <strong>Tokens &amp; Costs</strong> (filter by source).</li>
+      </ul>
+
+      <h2 id="examples">Examples</h2>
+      <h3>Chat (JSON)</h3>
+      <pre>curl -s http://127.0.0.1:20800/v1/chat/completions \
+  -H "Authorization: Bearer $HELMORA_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "messages": [{"role":"user","content":"Say hello in one short sentence."}]
+  }'</pre>
+
+      <h3>Chat (SSE)</h3>
+      <pre>curl -N http://127.0.0.1:20800/v1/chat/completions \
+  -H "Authorization: Bearer $HELMORA_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "stream": true,
+    "messages": [{"role":"user","content":"Count to three."}]
+  }'</pre>
+
+      <h3>Embeddings</h3>
+      <pre>curl -s http://127.0.0.1:20800/v1/embeddings \
+  -H "Authorization: Bearer $HELMORA_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": ["alpha", "beta"]
+  }'</pre>
+
+      <h3>JavaScript (fetch)</h3>
+      <pre>const res = await fetch("http://127.0.0.1:20800/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.HELMORA_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "auto",
+    messages: [{ role: "user", content: "Ping" }],
+  }),
+});
+const json = await res.json();
+console.log(json.choices?.[0]?.message?.content);</pre>
+
+      <h3>Python</h3>
+      <pre>import os, requests
+
+r = requests.post(
+    "http://127.0.0.1:20800/v1/embeddings",
+    headers={"Authorization": f"Bearer {os.environ['HELMORA_KEY']}"},
+    json={"model": "text-embedding-3-small", "input": "hello"},
+    timeout=60,
+)
+r.raise_for_status()
+print(len(r.json()["data"][0]["embedding"]))</pre>
+
+      <h2 id="limits">Limits &amp; tips</h2>
+      <ul>
+        <li>JSON body size default: ~10&nbsp;MB (Express).</li>
+        <li>Embeddings: max 64 inputs per request.</li>
+        <li>Prefer verified, enabled providers for real upstream quality; demo paths exist for offline smoke.</li>
+        <li>Point OpenAI SDKs at this Hub with <code>base_url=http://127.0.0.1:20800/v1</code> and your Hub API key as <code>api_key</code>.</li>
+      </ul>
+
+      <footer>
+        Machine catalog: <a href="/docs.json">/docs.json</a> · Health: <a href="/health">/health</a>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>
