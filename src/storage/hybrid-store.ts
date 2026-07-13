@@ -38,6 +38,18 @@ import {
 import type { ControlVault } from './control-vault.js';
 import type { SqliteConfigStore } from './sqlite-store.js';
 import type { AgentPatch, ApiKeyPatch, ConfigStore, ProviderPatch } from './types.js';
+import type {
+  AppendChatMessageInput,
+  CreateChatSessionInput,
+  ImportChatStoreInput,
+  ImportChatStoreResult,
+  ListChatMessagesOpts,
+  ListChatMessagesResult,
+  StoredChatMessage,
+  StoredChatSession,
+  StoredChatSessionDetail,
+  UpdateChatSessionInput,
+} from './chat-types.js';
 
 export type HybridConfigStoreOptions = {
   control: ConfigStore;
@@ -644,6 +656,66 @@ export class HybridConfigStore implements ConfigStore {
 
   async importHubModels(input: ImportHubModelsInput): Promise<ImportHubModelsResult> {
     return this.workspace.importHubModels(input);
+  }
+
+  // Playground chat is workspace-local (like usage / model catalog) — keeps large
+  // history off the browser and off the Supabase control plane.
+  async listChatSessions(): Promise<StoredChatSession[]> {
+    return this.workspace.listChatSessions();
+  }
+
+  async getChatSession(id: string): Promise<StoredChatSessionDetail | null> {
+    return this.workspace.getChatSession(id);
+  }
+
+  async createChatSession(
+    input?: CreateChatSessionInput
+  ): Promise<StoredChatSessionDetail> {
+    return this.workspace.createChatSession(input);
+  }
+
+  async updateChatSession(
+    id: string,
+    patch: UpdateChatSessionInput
+  ): Promise<StoredChatSession | null> {
+    return this.workspace.updateChatSession(id, patch);
+  }
+
+  async deleteChatSession(id: string): Promise<boolean> {
+    return this.workspace.deleteChatSession(id);
+  }
+
+  async listChatMessages(
+    sessionId: string,
+    opts?: ListChatMessagesOpts
+  ): Promise<ListChatMessagesResult> {
+    return this.workspace.listChatMessages(sessionId, opts);
+  }
+
+  async appendChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return this.workspace.appendChatMessages(sessionId, messages);
+  }
+
+  async replaceChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return this.workspace.replaceChatMessages(sessionId, messages);
+  }
+
+  async getActiveChatSessionId(): Promise<string | null> {
+    return this.workspace.getActiveChatSessionId();
+  }
+
+  async setActiveChatSessionId(id: string | null): Promise<void> {
+    return this.workspace.setActiveChatSessionId(id);
+  }
+
+  async importChatStore(input: ImportChatStoreInput): Promise<ImportChatStoreResult> {
+    return this.workspace.importChatStore(input);
   }
 
   async close(): Promise<void> {

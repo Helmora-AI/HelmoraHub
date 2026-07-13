@@ -61,6 +61,32 @@ import type {
   StoredHubModel,
   UpdateHubModelInput,
 } from '../models/types.js';
+import {
+  ensureChatTables,
+  sqliteAppendChatMessages,
+  sqliteCreateChatSession,
+  sqliteDeleteChatSession,
+  sqliteGetActiveChatSessionId,
+  sqliteGetChatSession,
+  sqliteImportChatStore,
+  sqliteListChatMessages,
+  sqliteListChatSessions,
+  sqliteReplaceChatMessages,
+  sqliteSetActiveChatSessionId,
+  sqliteUpdateChatSession,
+} from './chat-sqlite.js';
+import type {
+  AppendChatMessageInput,
+  CreateChatSessionInput,
+  ImportChatStoreInput,
+  ImportChatStoreResult,
+  ListChatMessagesOpts,
+  ListChatMessagesResult,
+  StoredChatMessage,
+  StoredChatSession,
+  StoredChatSessionDetail,
+  UpdateChatSessionInput,
+} from './chat-types.js';
 
 type ApiKeyRow = {
   id: string;
@@ -187,6 +213,7 @@ export class SqliteConfigStore implements ConfigStore {
     this.ensureProviderColumns();
     this.ensureUsageEventsSchema();
     ensureModelsTable(this.db);
+    ensureChatTables(this.db);
     ensureControlVaultSchema(this.db);
     ensureOAuthVaultSchema(this.db);
   }
@@ -1076,6 +1103,64 @@ export class SqliteConfigStore implements ConfigStore {
 
   async importHubModels(input: ImportHubModelsInput): Promise<ImportHubModelsResult> {
     return importHubModelsSync(this.db, input);
+  }
+
+  async listChatSessions(): Promise<StoredChatSession[]> {
+    return sqliteListChatSessions(this.db);
+  }
+
+  async getChatSession(id: string): Promise<StoredChatSessionDetail | null> {
+    return sqliteGetChatSession(this.db, id);
+  }
+
+  async createChatSession(
+    input?: CreateChatSessionInput
+  ): Promise<StoredChatSessionDetail> {
+    return sqliteCreateChatSession(this.db, input);
+  }
+
+  async updateChatSession(
+    id: string,
+    patch: UpdateChatSessionInput
+  ): Promise<StoredChatSession | null> {
+    return sqliteUpdateChatSession(this.db, id, patch);
+  }
+
+  async deleteChatSession(id: string): Promise<boolean> {
+    return sqliteDeleteChatSession(this.db, id);
+  }
+
+  async listChatMessages(
+    sessionId: string,
+    opts?: ListChatMessagesOpts
+  ): Promise<ListChatMessagesResult> {
+    return sqliteListChatMessages(this.db, sessionId, opts);
+  }
+
+  async appendChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return sqliteAppendChatMessages(this.db, sessionId, messages);
+  }
+
+  async replaceChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return sqliteReplaceChatMessages(this.db, sessionId, messages);
+  }
+
+  async getActiveChatSessionId(): Promise<string | null> {
+    return sqliteGetActiveChatSessionId(this.db);
+  }
+
+  async setActiveChatSessionId(id: string | null): Promise<void> {
+    sqliteSetActiveChatSessionId(this.db, id);
+  }
+
+  async importChatStore(input: ImportChatStoreInput): Promise<ImportChatStoreResult> {
+    return sqliteImportChatStore(this.db, input);
   }
 
   async close(): Promise<void> {

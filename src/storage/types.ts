@@ -15,6 +15,7 @@ import type {
   StoredHubModel,
   UpdateHubModelInput,
 } from '../models/types.js';
+import type { ChatStoreMethods } from './chat-types.js';
 
 export type ProviderPatch = Partial<{
   enabled: boolean;
@@ -50,7 +51,7 @@ export type ApiKeyPatch = Partial<{
 }>;
 
 /** Persistent config / credentials store (SQLite local or Supabase cloud). */
-export interface ConfigStore {
+export interface ConfigStore extends ChatStoreMethods {
   readonly backend: 'sqlite' | 'supabase';
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;

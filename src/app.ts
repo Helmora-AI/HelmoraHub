@@ -115,7 +115,7 @@ export function createApp(_config: Config) {
         health: 'GET /health',
         state: 'GET /state',
         registry: 'GET /registry',
-        chat: 'POST /v1/chat/completions · POST /v1/embeddings (hel_* / ctrl_*) · POST /api/chat/completions (SPA session; history is browser-local)',
+        chat: 'POST /v1/chat/completions · POST /v1/embeddings (hel_* / ctrl_*) · POST /api/chat/completions (SPA session) · /api/chat/sessions (Hub SQL history)',
         models: 'GET /v1/models · GET /api/models (admin)',
         admin: 'GET /api/status (admin)',
         schema: 'sql/supabase-schema.sql (apply in Supabase SQL Editor before SQL mode)',

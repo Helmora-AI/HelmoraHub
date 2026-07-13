@@ -36,6 +36,30 @@ import {
 } from './provider-seed-sync.js';
 import type { AgentPatch, ApiKeyPatch, ConfigStore, ProviderPatch } from './types.js';
 import {
+  CHAT_ACTIVE_SETTING_KEY,
+  supabaseAppendChatMessages,
+  supabaseCreateChatSession,
+  supabaseDeleteChatSession,
+  supabaseGetChatSession,
+  supabaseImportChatStore,
+  supabaseListChatMessages,
+  supabaseListChatSessions,
+  supabaseReplaceChatMessages,
+  supabaseUpdateChatSession,
+} from './chat-supabase.js';
+import type {
+  AppendChatMessageInput,
+  CreateChatSessionInput,
+  ImportChatStoreInput,
+  ImportChatStoreResult,
+  ListChatMessagesOpts,
+  ListChatMessagesResult,
+  StoredChatMessage,
+  StoredChatSession,
+  StoredChatSessionDetail,
+  UpdateChatSessionInput,
+} from './chat-types.js';
+import {
   createHubModelJson,
   deleteHubModelJson,
   importHubModelsJson,
@@ -856,6 +880,84 @@ export class SupabaseConfigStore implements ConfigStore {
 
   async importHubModels(input: ImportHubModelsInput): Promise<ImportHubModelsResult> {
     return this.withHubModelsCtx((ctx) => importHubModelsJson(ctx, input));
+  }
+
+  async listChatSessions(): Promise<StoredChatSession[]> {
+    return supabaseListChatSessions(this.client);
+  }
+
+  async getChatSession(id: string): Promise<StoredChatSessionDetail | null> {
+    return supabaseGetChatSession(this.client, id);
+  }
+
+  async createChatSession(
+    input?: CreateChatSessionInput
+  ): Promise<StoredChatSessionDetail> {
+    return supabaseCreateChatSession(this.client, input, () =>
+      this.getActiveChatSessionId()
+    );
+  }
+
+  async updateChatSession(
+    id: string,
+    patch: UpdateChatSessionInput
+  ): Promise<StoredChatSession | null> {
+    return supabaseUpdateChatSession(this.client, id, patch);
+  }
+
+  async deleteChatSession(id: string): Promise<boolean> {
+    return supabaseDeleteChatSession(this.client, id, async (deletedId) => {
+      const active = await this.getActiveChatSessionId();
+      if (active === deletedId) await this.setActiveChatSessionId(null);
+    });
+  }
+
+  async listChatMessages(
+    sessionId: string,
+    opts?: ListChatMessagesOpts
+  ): Promise<ListChatMessagesResult> {
+    return supabaseListChatMessages(this.client, sessionId, opts);
+  }
+
+  async appendChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return supabaseAppendChatMessages(this.client, sessionId, messages);
+  }
+
+  async replaceChatMessages(
+    sessionId: string,
+    messages: AppendChatMessageInput[]
+  ): Promise<StoredChatMessage[]> {
+    return supabaseReplaceChatMessages(this.client, sessionId, messages);
+  }
+
+  async getActiveChatSessionId(): Promise<string | null> {
+    const raw = await this.getSetting(CHAT_ACTIVE_SETTING_KEY);
+    const id = raw?.trim();
+    if (!id) return null;
+    const session = await this.getChatSession(id);
+    return session ? id : null;
+  }
+
+  async setActiveChatSessionId(id: string | null): Promise<void> {
+    if (!id) {
+      await this.setSetting(CHAT_ACTIVE_SETTING_KEY, '');
+      return;
+    }
+    const session = await this.getChatSession(id);
+    if (!session) throw new Error(`Chat session not found: ${id}`);
+    await this.setSetting(CHAT_ACTIVE_SETTING_KEY, id);
+  }
+
+  async importChatStore(input: ImportChatStoreInput): Promise<ImportChatStoreResult> {
+    return supabaseImportChatStore(
+      this.client,
+      input,
+      (activeId) => this.setActiveChatSessionId(activeId),
+      () => this.getActiveChatSessionId()
+    );
   }
 
   async close(): Promise<void> {

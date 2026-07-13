@@ -41,7 +41,7 @@ const SQL_OPTION = {
   id: 'sql' as const,
   label: 'SQL (Supabase)',
   description:
-    'Hybrid control plane: providers/agents/keys settings on Supabase; vault + usage workspace on local SQLite. Playground chat stays in the browser (not Hub/Supabase).',
+    'Hybrid control plane: providers/agents/keys settings on Supabase; vault + usage + Playground chat on local SQLite workspace.',
 };
 
 /** Aggregated settings for SPA (tunnel read-only). */

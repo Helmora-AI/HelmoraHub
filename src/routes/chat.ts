@@ -25,9 +25,11 @@ import {
   guardOutputText,
 } from '../guardrail/index.js';
 import { resolveRouteIdentity, prepareUpstreamMessages } from '../services/identity-context.js';
+import { mountChatHistoryRoutes } from './chat-history.js';
 
 export const chatRouter = Router();
 chatRouter.use(requireAdminSession);
+mountChatHistoryRoutes(chatRouter);
 
 const HUB_CHAT_MAX_MESSAGES = 200;
 const HUB_CHAT_MAX_TOKENS = 128_000;

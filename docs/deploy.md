@@ -29,7 +29,7 @@ Recommended production shape:
 | Control (light) | **Supabase** Postgres — providers, API keys, agents, small settings |
 | Vault + workspace (heavy) | **Local SQLite** under `DATA_DIR` on the Hub host |
 
-When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the control-plane primary; a control **vault** mirror and all heavy workspace data (usage, models catalog growth) stay on local SQLite. Playground chat history is browser `localStorage` only (not Hub, not Supabase).
+When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the control-plane primary; a control **vault** mirror and all heavy workspace data (usage, models catalog growth, Playground chat) stay on local SQLite.
 
 ### Outage and recovery
 
@@ -49,7 +49,7 @@ When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the con
 
 Admin helper: `GET /api/settings/storage/schema` returns the SQL text for copy/paste.
 
-**Not stored in Supabase:** Playground chat history (browser `localStorage` only) and heavy workspace data (usage, model catalog growth) stay on Hub local SQLite.
+**Not stored in Supabase (hybrid):** heavy workspace data (usage, model catalog growth, Playground chat) stay on Hub local SQLite. Control-plane settings/providers/agents/keys live on Supabase.
 
 Health fields (no secrets): `GET /api/status` → `control: { controlPlane, vault, outboxPending }`.
 

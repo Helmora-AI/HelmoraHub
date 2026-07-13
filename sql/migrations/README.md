@@ -16,6 +16,12 @@ Do **not** add `\i` / `\include` files here — the Supabase SQL Editor does not
 
 If you previously applied the old CtrlHub schema, run [`../rename-ctrlhub-to-helmora.sql`](../rename-ctrlhub-to-helmora.sql) **once** before or instead of re-creating tables.
 
+### Existing installs (already have `helmora_settings`)
+
+If you already applied an older `supabase-schema.sql` and only need new Playground chat tables, paste and run the full contents of [`002_chat_sessions.sql`](./002_chat_sessions.sql) (no `\i`).
+
+**Hybrid note:** Playground chat history is stored in Hub **local SQLite workspace** (same as usage events), not in browser `localStorage`. The Supabase chat tables keep schema parity with `SupabaseConfigStore`; hybrid mode does not require `002` for Playground to work after upgrading Hub.
+
 ## Versioned copies (optional)
 
 If you need a dated snapshot for ops, copy `supabase-schema.sql` into this folder as a full standalone `.sql` file (no `\i`). Prefer keeping one source of truth and documenting apply steps over maintaining duplicates.
