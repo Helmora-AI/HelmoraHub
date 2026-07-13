@@ -4,6 +4,7 @@
  * Maps SERVER_PORT → PORT, ensures data dir, then runs dist/index.js
  *
  * Panel start command examples:
+ *   bash scripts/ptero-startup.sh
  *   node scripts/ptero-start.mjs
  *   npm start
  */

@@ -13,7 +13,7 @@
     "Node.js 20": "ghcr.io/pterodactyl/yolks:nodejs_20"
   },
   "file_denylist": [],
-  "startup": "node scripts/ptero-start.mjs",
+  "startup": "bash scripts/ptero-startup.sh",
   "config": {
     "files": "{}",
     "startup": "{\n    \"done\": [\n        \"Helmora AI listening on\"\n    ]\n}",
@@ -22,7 +22,7 @@
   },
   "scripts": {
     "installation": {
-      "script": "#!/bin/bash\n# Helmora Hub Pterodactyl install\nset -e\ncd /mnt/server\n\nif [ ! -f package.json ]; then\n  echo \"Upload Helmora Hub source (or git clone) into the server directory first.\"\n  exit 1\nfi\n\n# Prefer panel Node; yolks image provides npm/node\nif command -v npm >/dev/null 2>&1; then\n  NPM=npm\nelse\n  echo \"npm not found in install container\"\n  exit 1\nfi\n\n$NPM install\n$NPM run build\n$NPM prune --omit=dev\nmkdir -p data\n\nif [ ! -f .env ] && [ -f .env.example ]; then\n  cp .env.example .env\n  echo \"Created .env from .env.example — edit via File Manager\"\nfi\n\necho \"============================================\"\necho \"Helmora Hub installed.\"\necho \"Start command: node scripts/ptero-start.mjs\"\necho \"Settings UI:   http://<ip>:<port>/settings\"\necho \"============================================\"\n",
+      "script": "#!/bin/bash\n# Helmora Hub Pterodactyl install (Linux)\nset -e\ncd /mnt/server\n\nif [ ! -f package.json ]; then\n  echo \"Upload Helmora Hub source (or git clone) into the server directory first.\"\n  exit 1\nfi\n\nif ! command -v npm >/dev/null 2>&1; then\n  echo \"npm not found in install container\"\n  exit 1\nfi\n\nchmod +x scripts/ptero-startup.sh 2>/dev/null || true\nnpm install\nnpm run build\nnpm prune --omit=dev\nmkdir -p data\n\nif [ ! -f .env ] && [ -f .env.example ]; then\n  cp .env.example .env\n  echo \"Created .env from .env.example — edit via File Manager\"\nfi\n\necho \"============================================\"\necho \"Helmora Hub installed.\"\necho \"Startup command: bash scripts/ptero-startup.sh\"\necho \"Settings UI:     http://<ip>:<port>/settings\"\necho \"============================================\"\n",
       "container": "ghcr.io/pterodactyl/installers:debian",
       "entrypoint": "bash"
     }

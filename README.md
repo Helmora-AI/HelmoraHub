@@ -94,7 +94,7 @@ npm run dev
 | Local | `npm run build && npm start` |
 | Docker | `npm run docker:up` |
 | VPS systemd | [`deploy/helmora.service`](deploy/helmora.service) |
-| Pterodactyl | Import [`deploy/pterodactyl/egg-helmora.json`](deploy/pterodactyl/egg-helmora.json) |
+| Pterodactyl | Import egg · startup `bash scripts/ptero-startup.sh` |
 
 Guide: **[docs/deploy.md](docs/deploy.md)**
 
