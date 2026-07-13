@@ -666,6 +666,7 @@ adminRouter.post(['/toggles/:id/verify', '/providers/:id/verify'], async (req, r
 
     const updated = await updateProvider(id, {
       apiKey: shouldPersist ? ephemeralKey : undefined,
+      authMode: shouldPersist ? 'api_key' : undefined,
       baseUrl: parsed.data.baseUrl === undefined ? undefined : parsed.data.baseUrl,
       tier: parsed.data.tier,
       benchmarkModel:
