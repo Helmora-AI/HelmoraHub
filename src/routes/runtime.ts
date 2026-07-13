@@ -13,6 +13,16 @@ runtimeRouter.get('/health', (_req, res) => {
   });
 });
 
+/** SPA / proxy alias — same payload as GET /health */
+runtimeRouter.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    service: 'Helmora AI',
+    version: '0.1.0',
+  });
+});
+
 runtimeRouter.get('/state', async (_req, res, next) => {
   try {
     const agents = (await listAgents()).filter((a) => a.enabled);

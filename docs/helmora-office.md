@@ -31,12 +31,12 @@ When `model` is `auto`, Hub applies **Helmora Mini 1.0** multi-model chain (see 
 
 ```bash
 cd HelmoraOffice
-npm run sync      # copy research/Claw3D-main → app/
-cd app && npm install
-npm run dev       # from HelmoraOffice root: npm run dev
+npm run sync      # Claw3D + helmora-overrides
+cd app && npm install && copy ..\.env.example .env.local
+cd .. && npm run dev
 ```
 
-Configure Studio runtime profile **custom** → Hub URL.
+Connect screen defaults to **Helmora Hub** (URL + `hel_*` key). See `HelmoraOffice/CREDITS.md`.
 
 ## Admin UI
 

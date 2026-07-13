@@ -826,3 +826,12 @@ adminRouter.patch('/agents/:id', async (req, res, next) => {
     next(err);
   }
 });
+
+adminRouter.use((_req, res) => {
+  res.status(404).json({
+    error: {
+      message: `No admin API route for ${_req.method} ${_req.path}`,
+      type: 'not_found',
+    },
+  });
+});

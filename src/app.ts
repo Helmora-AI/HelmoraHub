@@ -114,13 +114,22 @@ export function createApp(_config: Config) {
         storageApi: 'GET|PUT /api/settings/storage (admin)',
         storageSchema: 'GET /api/settings/storage/schema (admin) — SQL DDL for Supabase',
         tunnelApi: 'GET|PUT /api/settings/tunnel (admin)',
-        health: 'GET /health',
+        health: 'GET /health · GET /api/health',
         state: 'GET /state',
         registry: 'GET /registry',
         chat: 'POST /v1/chat/completions · POST /v1/embeddings (hel_* / ctrl_*) · POST /api/chat/completions (SPA session) · /api/chat/sessions (Hub SQL history)',
         models: 'GET /v1/models · GET /api/models (admin)',
         admin: 'GET /api/status (admin)',
         schema: 'sql/supabase-schema.sql (apply in Supabase SQL Editor before SQL mode)',
+      },
+    });
+  });
+
+  app.use((req, res) => {
+    res.status(404).json({
+      error: {
+        message: `No route for ${req.method} ${req.path}`,
+        type: 'not_found',
       },
     });
   });
