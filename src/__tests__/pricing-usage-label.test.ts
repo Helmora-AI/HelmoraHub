@@ -81,8 +81,8 @@ describe('cross-provider default model pricing', () => {
     {
       provider: 'kilo',
       model: 'nvidia/nemotron-3-super-120b-a12b:free',
-      expectInput: 0,
-      note: 'OpenRouter-style :free is $0',
+      expectInput: 0.5,
+      note: ':free still estimates at market rate for base id',
     },
     {
       provider: 'subscription-demo',
@@ -113,9 +113,10 @@ describe('cross-provider default model pricing', () => {
     });
   }
 
-  it('bazaarlink auto:free bills as free, not auto placeholder', () => {
+  it('auto:free does not use auto placeholder rate', () => {
     const p = getPricingForModel('auto:free', 'bazaarlink');
-    expect(p?.input).toBe(0);
+    // No market base id — estimate stays unset / zero cost
+    expect(p).toBeNull();
     expect(costForModel('auto:free', TOKENS, 'bazaarlink')).toBe(0);
   });
 });

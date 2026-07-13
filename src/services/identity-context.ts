@@ -38,10 +38,10 @@ export type IdentityContextSettings = {
 export const IDENTITY_SETTINGS_KEY = 'identity_context';
 
 export const HELMORA_ABOUT = [
-  'Helmora AI is an AI infrastructure platform built around Helmora Hub,',
-  'a layered gateway that routes requests across multiple models and',
-  'providers through an OpenAI-compatible API and an administrative',
-  'Playground. Helmora Hub is part of the broader Helmora AI ecosystem.',
+  'Helmora AI is the brand and platform behind the Helmora ecosystem.',
+  'Helmora Hub is its layered AI gateway product — an OpenAI-compatible',
+  'API and administrative Playground that routes requests across models',
+  'and providers — and is part of the Helmora AI ecosystem.',
 ].join(' ');
 
 const COMMON_CLOSING = [

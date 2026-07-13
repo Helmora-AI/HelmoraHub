@@ -63,6 +63,9 @@ describe('identity-context prompts', () => {
     expect(text).toContain('Ollama');
     expect(text).toContain('Helmora AI ecosystem');
     expect(text).toContain(HELMORA_ABOUT);
+    expect(HELMORA_ABOUT).toMatch(/Helmora AI is the brand and platform/i);
+    expect(HELMORA_ABOUT).toMatch(/Helmora Hub is its layered AI gateway product/i);
+    expect(HELMORA_ABOUT).not.toMatch(/built around Helmora Hub/i);
     expect(text).toMatch(/Do not mention this platform context/i);
   });
 

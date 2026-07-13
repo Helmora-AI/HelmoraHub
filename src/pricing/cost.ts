@@ -25,7 +25,7 @@ export function getPricingOverrides(): PricingOverrideMap {
   return { ...runtimeOverrides };
 }
 
-/** Free-tier / demo models should bill as $0, not fall through to placeholder rates. */
+/** Demo / echo builtins — not market models. */
 const ZERO_PRICING: ModelPricing = {
   input: 0,
   output: 0,
@@ -41,7 +41,7 @@ function pricingCandidates(model: string): string[] {
     if (t && !out.includes(t)) out.push(t);
   };
   push(model);
-  // org/model:tag → try without :tag first (OpenRouter free / Ollama)
+  // org/model:tag → try without :tag (OpenRouter :free / Ollama tags)
   if (model.includes(':')) push(model.slice(0, model.indexOf(':')));
   for (const c of [...out]) {
     if (c.includes('/')) push(c.split('/').pop());
@@ -56,12 +56,22 @@ export function getPricingForModel(
   const trimmed = model?.trim();
   if (!trimmed) return null;
 
-  // Free endpoints and Hub demos — never treat as paid `auto` placeholder.
-  if (/:free$/i.test(trimmed) || /^demo\//i.test(trimmed)) {
+  // Hub demo / echo paths stay $0.
+  if (/^demo\//i.test(trimmed)) {
     return ZERO_PRICING;
   }
 
+  // Free-tier suffixes (:free) still estimate at market rates for the base model id.
+  const freeTier = /:free$/i.test(trimmed);
+
   for (const candidate of pricingCandidates(trimmed)) {
+    if (freeTier) {
+      // Don't ask raw pricing with the `:free` suffix (it strips to `auto` for auto:free).
+      if (/:free$/i.test(candidate)) continue;
+      // Avoid the generic OpenRouter `auto` placeholder rate.
+      if (candidate.toLowerCase() === 'auto') continue;
+    }
+
     if (runtimeOverrides[candidate]) return runtimeOverrides[candidate];
     const hit = (rawGetPricing(provider ?? '', candidate) as ModelPricing | null) ?? null;
     if (hit) return hit;
