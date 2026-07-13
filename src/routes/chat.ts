@@ -8,7 +8,12 @@ import { listProviders } from '../db/index.js';
 import { HUB_MODES, type HubMode } from '../types.js';
 import { isMetaModel, type TokenUsage } from '../keys/types.js';
 import { usdToMicros } from '../keys/types.js';
-import { averageModelCosts, costForModel } from '../pricing/cost.js';
+import {
+  averageModelCosts,
+  billingModelId,
+  costForModel,
+  usageModelLabel,
+} from '../pricing/cost.js';
 import { getConfigStore } from '../storage/index.js';
 import { randomId } from '../lib/auth.js';
 import {
@@ -180,29 +185,34 @@ chatRouter.post('/completions', async (req, res, next) => {
     const underlying = [
       ...new Set(
         [
-          provider?.defaultModel,
           args.routedModel !== 'auto' ? args.routedModel : null,
+          provider?.defaultModel,
+          args.requestedModel.startsWith('catalog/') ? args.requestedModel : null,
         ].filter(Boolean) as string[]
       ),
     ];
+    const billedModel = billingModelId({
+      requestedModel: args.requestedModel,
+      routedModel: args.routedModel,
+      defaultModel: provider?.defaultModel,
+    });
     const costUsd = args.meta
       ? averageModelCosts(
-          underlying.length > 0
-            ? underlying
-            : [provider?.defaultModel ?? args.routedModel ?? 'auto'],
+          underlying.filter((m) => !m.startsWith('catalog/')).length > 0
+            ? underlying.filter((m) => !m.startsWith('catalog/'))
+            : [billedModel],
           args.usage
         )
-      : costForModel(
-          provider?.defaultModel || args.routedModel || args.requestedModel,
-          args.usage,
-          args.providerId
-        );
+      : costForModel(billedModel, args.usage, args.providerId);
     await getConfigStore().recordUsage({
       requestId,
       source: 'admin_chat',
       apiKeyId: null,
       status: usageStatus,
-      model: args.requestedModel,
+      model: usageModelLabel({
+        requestedModel: args.requestedModel,
+        routedModel: args.routedModel,
+      }),
       underlyingModels: underlying,
       providerId: args.providerId,
       costMicrosUsd: usdToMicros(costUsd),

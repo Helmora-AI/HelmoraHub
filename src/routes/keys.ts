@@ -161,11 +161,38 @@ usageRouter.get('/', async (req, res, next) => {
       events = events.filter((e) => e.source === source);
     }
     events = events.slice(0, limit);
+    const catalogIds = [
+      ...new Set(
+        events
+          .filter((e) => e.model.startsWith('catalog/'))
+          .map((e) => e.model.slice('catalog/'.length))
+      ),
+    ];
+    const catalogNames = new Map<string, string>();
+    await Promise.all(
+      catalogIds.map(async (id) => {
+        const row = await getConfigStore().getHubModel(id);
+        if (row?.modelId) catalogNames.set(id, row.modelId);
+      })
+    );
     res.json({
-      events: events.map((e) => ({
-        ...e,
-        costUsd: usageCostUsd(e),
-      })),
+      events: events.map((e) => {
+        let model = e.model;
+        if (model.startsWith('catalog/')) {
+          const fromUnderlying = e.underlyingModels?.find(
+            (m) => m && !m.startsWith('catalog/') && m !== 'auto'
+          );
+          model =
+            fromUnderlying ??
+            catalogNames.get(model.slice('catalog/'.length)) ??
+            model;
+        }
+        return {
+          ...e,
+          model,
+          costUsd: usageCostUsd(e),
+        };
+      }),
     });
   } catch (err) {
     next(err);

@@ -25,14 +25,48 @@ export function getPricingOverrides(): PricingOverrideMap {
   return { ...runtimeOverrides };
 }
 
+/** Free-tier / demo models should bill as $0, not fall through to placeholder rates. */
+const ZERO_PRICING: ModelPricing = {
+  input: 0,
+  output: 0,
+  cached: 0,
+  reasoning: 0,
+  cache_creation: 0,
+};
+
+function pricingCandidates(model: string): string[] {
+  const out: string[] = [];
+  const push = (v: string | undefined) => {
+    const t = v?.trim();
+    if (t && !out.includes(t)) out.push(t);
+  };
+  push(model);
+  // org/model:tag → try without :tag first (OpenRouter free / Ollama)
+  if (model.includes(':')) push(model.slice(0, model.indexOf(':')));
+  for (const c of [...out]) {
+    if (c.includes('/')) push(c.split('/').pop());
+  }
+  return out;
+}
+
 export function getPricingForModel(
   model: string,
   provider?: string | null
 ): ModelPricing | null {
-  const base = model.includes('/') ? model.split('/').pop()! : model;
-  if (runtimeOverrides[model]) return runtimeOverrides[model];
-  if (runtimeOverrides[base]) return runtimeOverrides[base];
-  return (rawGetPricing(provider ?? '', model) as ModelPricing | null) ?? null;
+  const trimmed = model?.trim();
+  if (!trimmed) return null;
+
+  // Free endpoints and Hub demos — never treat as paid `auto` placeholder.
+  if (/:free$/i.test(trimmed) || /^demo\//i.test(trimmed)) {
+    return ZERO_PRICING;
+  }
+
+  for (const candidate of pricingCandidates(trimmed)) {
+    if (runtimeOverrides[candidate]) return runtimeOverrides[candidate];
+    const hit = (rawGetPricing(provider ?? '', candidate) as ModelPricing | null) ?? null;
+    if (hit) return hit;
+  }
+  return null;
 }
 
 export function calculateCostFromTokens(
@@ -59,6 +93,35 @@ export function costForModel(
 ): number {
   const pricing = getPricingForModel(model, provider);
   return calculateCostFromTokens(tokens, pricing);
+}
+
+/**
+ * Label stored on usage events. Prefer the concrete upstream id (e.g. gemma3:27b)
+ * over opaque catalog refs (catalog/mdl_…).
+ */
+export function usageModelLabel(args: {
+  requestedModel: string;
+  routedModel: string;
+}): string {
+  const routed = args.routedModel?.trim();
+  if (routed && routed !== 'auto') return routed;
+  return args.requestedModel;
+}
+
+/**
+ * Model id used for pricing. Prefer the model actually routed — never let a stale
+ * provider.defaultModel mask the selected catalog/upstream id.
+ */
+export function billingModelId(args: {
+  requestedModel: string;
+  routedModel: string;
+  defaultModel?: string | null;
+}): string {
+  const routed = args.routedModel?.trim();
+  if (routed && routed !== 'auto') return routed;
+  const def = args.defaultModel?.trim();
+  if (def) return def;
+  return args.requestedModel;
 }
 
 /** Meta route: average of per-model costs (missing pricing → 0). */

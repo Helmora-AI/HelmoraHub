@@ -163,4 +163,23 @@ describe('POST /api/chat/completions', () => {
     expect(admin!.requestId).toMatch(/^req_/);
     expect(typeof admin!.costMicrosUsd).toBe('number');
   });
+
+  it('records catalog usage under upstream model id', async () => {
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .send({
+        model: `catalog/${catalogId}`,
+        messages: [{ role: 'user', content: 'label check' }],
+        stream: false,
+      });
+    expect(res.status).toBe(200);
+
+    const events = await getConfigStore().listUsage({ limit: 20 });
+    const hit = events.find(
+      (e) => e.source === 'admin_chat' && e.model === 'demo/chat-test'
+    );
+    expect(hit).toBeTruthy();
+    expect(hit!.model).not.toMatch(/^catalog\//);
+  });
 });

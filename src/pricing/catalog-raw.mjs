@@ -123,7 +123,10 @@ export const MODEL_PRICING = {
  * Keyed by provider alias (cc, cx, gc, gh, ...) or provider id (openai, anthropic, ...).
  */
 export const PROVIDER_PRICING = {
-  // GitHub Copilot (gh) — explicit override, matches canonical gpt-5.3-codex rate
+  // GitHub Models / Copilot — catalog id is `github` (legacy alias `gh` kept)
+  github: {
+    "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },
+  },
   gh: {
     "gpt-5.3-codex": { input: 1.75, output: 14.00, cached: 0.175, reasoning: 14.00, cache_creation: 1.75 },
   },
@@ -206,6 +209,36 @@ export const PATTERN_PRICING = [
   // --- Grok ---
   { pattern: "grok-code-*",     pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
   { pattern: "grok-*",          pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+
+  // --- Open / local weights (Ollama tags like gemma3:27b) — cloud-equivalent estimates ---
+  { pattern: "gemma*",          pricing: { input: 0.10,  output: 0.40,  cached: 0.05,  reasoning: 0.60,   cache_creation: 0.10  } },
+  { pattern: "llama*",          pricing: { input: 0.20,  output: 0.80,  cached: 0.10,  reasoning: 1.20,   cache_creation: 0.20  } },
+  { pattern: "mistral*",        pricing: { input: 0.15,  output: 0.60,  cached: 0.075, reasoning: 0.90,   cache_creation: 0.15  } },
+  { pattern: "mixtral*",        pricing: { input: 0.30,  output: 1.20,  cached: 0.15,  reasoning: 1.80,   cache_creation: 0.30  } },
+  { pattern: "codestral*",      pricing: { input: 0.30,  output: 0.90,  cached: 0.15,  reasoning: 1.35,   cache_creation: 0.30  } },
+  { pattern: "phi*",            pricing: { input: 0.10,  output: 0.40,  cached: 0.05,  reasoning: 0.60,   cache_creation: 0.10  } },
+  { pattern: "yi-*",            pricing: { input: 0.20,  output: 0.80,  cached: 0.10,  reasoning: 1.20,   cache_creation: 0.20  } },
+  { pattern: "command-r*",      pricing: { input: 0.50,  output: 1.50,  cached: 0.25,  reasoning: 2.25,   cache_creation: 0.50  } },
+  { pattern: "gpt-oss*",        pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+  { pattern: "nemotron*",       pricing: { input: 0.50,  output: 1.50,  cached: 0.25,  reasoning: 2.25,   cache_creation: 0.50  } },
+  { pattern: "qwq*",            pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+
+  // --- Search / agent / regional gateways ---
+  { pattern: "sonar*",          pricing: { input: 3.00,  output: 15.00, cached: 0.30,  reasoning: 15.00,  cache_creation: 3.00  } },
+  { pattern: "perplexity*",     pricing: { input: 3.00,  output: 15.00, cached: 0.30,  reasoning: 15.00,  cache_creation: 3.00  } },
+  { pattern: "reka-*",          pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+  { pattern: "venice-*",        pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+  { pattern: "kira-*",          pricing: { input: 1.00,  output: 4.00,  cached: 0.50,  reasoning: 6.00,   cache_creation: 1.00  } },
+  { pattern: "mimo-*",          pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+  { pattern: "seed-*",          pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+  { pattern: "doubao-*",        pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+
+  // --- Opaque gateway aliases (estimate) ---
+  { pattern: "openai-fast",     pricing: { input: 0.15,  output: 0.60,  cached: 0.075, reasoning: 0.90,   cache_creation: 0.15  } },
+  { pattern: "big-pickle",      pricing: { input: 0.50,  output: 2.00,  cached: 0.25,  reasoning: 3.00,   cache_creation: 0.50  } },
+
+  // --- Demo builtins (explicit zero) ---
+  { pattern: "demo/*",          pricing: { input: 0,     output: 0,     cached: 0,     reasoning: 0,      cache_creation: 0     } },
 ];
 
 /**
@@ -230,20 +263,37 @@ export function matchPattern(pattern, model) {
 export function getPricingForModel(provider, model) {
   if (!model) return null;
 
-  // 1. Provider-specific override
-  if (provider && PROVIDER_PRICING[provider]?.[model]) {
-    return PROVIDER_PRICING[provider][model];
+  // Strip OpenRouter/Ollama-style tags for lookup (keep original for provider override key)
+  const untagged = model.includes(":") ? model.slice(0, model.indexOf(":")) : model;
+  const candidates = [model];
+  if (untagged !== model) candidates.push(untagged);
+  for (const c of [...candidates]) {
+    if (c.includes("/")) {
+      const base = c.split("/").pop();
+      if (base && !candidates.includes(base)) candidates.push(base);
+    }
   }
 
-  // 2. Canonical model pricing (strip vendor prefix if needed: "deepseek/deepseek-chat" → "deepseek-chat")
-  const baseModel = model.includes("/") ? model.split("/").pop() : model;
-  if (MODEL_PRICING[baseModel]) return MODEL_PRICING[baseModel];
-  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  for (const candidate of candidates) {
+    // 1. Provider-specific override
+    if (provider && PROVIDER_PRICING[provider]?.[candidate]) {
+      return PROVIDER_PRICING[provider][candidate];
+    }
+    const lower = candidate.toLowerCase();
+    if (provider && PROVIDER_PRICING[provider]?.[lower]) {
+      return PROVIDER_PRICING[provider][lower];
+    }
+    // 2. Canonical model pricing (case-insensitive — HF/NIM mix casing)
+    if (MODEL_PRICING[candidate]) return MODEL_PRICING[candidate];
+    if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
+  }
 
-  // 3. Pattern match
-  for (const { pattern, pricing } of PATTERN_PRICING) {
-    if (matchPattern(pattern, baseModel) || matchPattern(pattern, model)) {
-      return pricing;
+  // 3. Pattern match against all candidates
+  for (const candidate of candidates) {
+    for (const { pattern, pricing } of PATTERN_PRICING) {
+      if (matchPattern(pattern, candidate)) {
+        return pricing;
+      }
     }
   }
 

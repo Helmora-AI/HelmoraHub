@@ -9,7 +9,9 @@ import { HUB_MODES, type HubMode } from '../types.js';
 import { isMetaModel, META_MODEL_ID, type TokenUsage } from '../keys/types.js';
 import {
   averageModelCosts,
+  billingModelId,
   costForModel,
+  usageModelLabel,
 } from '../pricing/cost.js';
 import { getConfigStore } from '../storage/index.js';
 import { randomId } from '../lib/auth.js';
@@ -525,22 +527,27 @@ async function applyBilling(
   const provider = providers.find((p) => p.id === args.providerId);
   const underlying = [
     ...new Set(
-      [provider?.defaultModel, args.routedModel !== 'auto' ? args.routedModel : null].filter(
-        Boolean
-      ) as string[]
+      [
+        args.routedModel !== 'auto' ? args.routedModel : null,
+        provider?.defaultModel,
+        args.requestedModel.startsWith('catalog/') ? args.requestedModel : null,
+      ].filter(Boolean) as string[]
     ),
   ];
 
+  const billedModel = billingModelId({
+    requestedModel: args.requestedModel,
+    routedModel: args.routedModel,
+    defaultModel: provider?.defaultModel,
+  });
   const costUsd = args.meta
     ? averageModelCosts(
-        underlying.length > 0 ? underlying : [provider?.defaultModel ?? args.routedModel ?? 'auto'],
+        underlying.filter((m) => !m.startsWith('catalog/')).length > 0
+          ? underlying.filter((m) => !m.startsWith('catalog/'))
+          : [billedModel],
         args.usage
       )
-    : costForModel(
-        provider?.defaultModel || args.routedModel || args.requestedModel,
-        args.usage,
-        args.providerId
-      );
+    : costForModel(billedModel, args.usage, args.providerId);
 
   const costMicrosUsd = usdToMicros(costUsd);
   const apiKey = req.ctrlApiKey?.apiKey;
@@ -554,7 +561,10 @@ async function applyBilling(
       source: 'api',
       apiKeyId: apiKey.id,
       status: args.status ?? 'complete',
-      model: args.requestedModel,
+      model: usageModelLabel({
+        requestedModel: args.requestedModel,
+        routedModel: args.routedModel,
+      }),
       underlyingModels: underlying,
       providerId: args.providerId,
       costMicrosUsd,
