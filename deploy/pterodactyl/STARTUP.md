@@ -1,38 +1,24 @@
-# Pterodactyl — custom startup (Linux)
+# Pterodactyl — custom startup (≤512 chars)
 
-Khi bật **Tùy chỉnh lệnh khởi động**, panel **không** chạy git/npm của egg nữa — lệnh custom phải tự làm đủ các bước.
+## Paste vào ô (ngắn)
 
-Docker image: `ghcr.io/pterodactyl/yolks:nodejs_20`  
-Server root: `/home/container`
+```bash
+[ -f scripts/ptero-startup.sh ]||(git clone --depth 1 ${GIT_REPO:-https://github.com/Helmora-AI/HelmoraHub.git} /tmp/h&&cp -a /tmp/h/. .&&rm -rf /tmp/h);bash scripts/ptero-startup.sh
+```
 
-Tunnel Cloudflare **không** nằm trong shell startup — Hub tự mở sau khi process chạy nếu có `CLOUDFLARE_TUNNEL_TOKEN` / file token / Settings.
+(~180 ký tự) Lần đầu: clone repo → rồi script lo `git pull` / `npm install` / `build` / start.
 
----
-
-## Paste vào ô (khuyến nghị — ngắn)
+Sau khi đã có source, có thể rút còn:
 
 ```bash
 bash scripts/ptero-startup.sh
 ```
 
-Script gồm: `git pull` → `NODE_PACKAGES` → `npm install` → `npm run build` → `node scripts/ptero-start.mjs`
+## Env hỗ trợ (panel)
 
----
+| Env | Ví dụ |
+|-----|--------|
+| `GIT_REPO` | `https://github.com/Helmora-AI/HelmoraHub.git` (optional; mặc định URL trên) |
+| `GIT_BRANCH` | dùng trong script sau khi đã có tree — clone lần đầu dùng default branch |
 
-## Paste vào ô (one-liner đầy đủ, không cần script)
-
-```bash
-cd /home/container; if [[ -d .git ]]; then git pull; fi; if [[ ! -z ${NODE_PACKAGES} ]]; then /usr/local/bin/npm install ${NODE_PACKAGES}; fi; if [[ ! -z ${UNNODE_PACKAGES} ]]; then /usr/local/bin/npm uninstall ${UNNODE_PACKAGES}; fi; if [ -f /home/container/package.json ]; then /usr/local/bin/npm install; fi; /usr/local/bin/npm run build && /usr/local/bin/node /home/container/scripts/ptero-start.mjs
-```
-
----
-
-## Env panel
-
-| Variable | Suggested |
-|----------|-----------|
-| `DATA_DIR` | `/home/container/data` |
-| `HELMORA_PUBLIC` | `1` |
-| `ENCRYPTION_KEY` | set |
-| `CLOUDFLARE_TUNNEL_TOKEN` | optional (Hub auto-starts tunnel) |
-| `HELMORA_PUBLIC_URL` / `HELMORA_FRONTEND_URL` | OAuth |
+Tunnel / Hub: `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_TUNNEL_AUTO_START=1`, `ENCRYPTION_KEY`, `DATA_DIR=/home/container/data`, `HELMORA_PUBLIC=1`.

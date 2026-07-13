@@ -8,8 +8,10 @@ data/
 *.db-shm
 .DS_Store
 Thumbs.db
-docs/
 .env.local
 *.txt
 test-out.txt
 .cursorignore
+
+# Design plans/specs only (repo-root). Leading `/` = do NOT match src/docs/catalog.ts
+/docs/superpowers/
