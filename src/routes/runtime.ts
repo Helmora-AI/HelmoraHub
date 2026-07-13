@@ -32,6 +32,8 @@ runtimeRouter.get('/state', async (_req, res, next) => {
         role: 'coordinator',
         lane: 'helmora',
         model_id: agents.find((a) => a.id === 'coordinator')?.model ?? 'auto',
+        description:
+          'Multi-role office agents (Boss, Dev, Ana, Scout, Ops, Review) with per-desk model/mode.',
       },
       runtime: {
         name: 'Helmora AI',

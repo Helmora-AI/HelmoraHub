@@ -5,7 +5,7 @@ import { requireApiKey } from '../middleware/requireApiKey.js';
 import { resolveMode } from '../services/mode-router.js';
 import { routeChat, routeChatStream } from '../services/tier-router.js';
 import { listProviders, listAgents } from '../db/index.js';
-import { HUB_MODES, type HubMode } from '../types.js';
+import { HUB_MODES, type HubMode, type ProviderToggle } from '../types.js';
 import { isMetaModel, META_MODEL_ID, type TokenUsage } from '../keys/types.js';
 import {
   averageModelCosts,
@@ -32,6 +32,7 @@ import {
 } from '../guardrail/index.js';
 import { routeEmbeddings } from '../services/embeddings.js';
 import { resolveRouteIdentity } from '../services/identity-context.js';
+import { resolveMiniRouteChain } from '../services/mini-route.js';
 
 export const v1Router = Router();
 
@@ -268,6 +269,8 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       role: ctx.role,
       lane: ctx.lane,
       sessionKey: ctx.sessionKey,
+      preferredChain: ctx.preferredChain,
+      modelByProvider: ctx.modelByProvider,
       identity: identityResolved.identity,
     };
 
@@ -348,13 +351,26 @@ async function buildContext(body: ChatBody, headerMode: string | null | undefine
   let lane = typeof body.lane === 'string' ? body.lane : null;
   let model = body.model;
   const requestedModel = body.model ?? 'auto';
-  const meta = isMetaModel(requestedModel);
+  const meta = isMetaModel(requestedModel) || requestedModel === 'auto';
   const sessionKey =
     (typeof body.session_id === 'string' && body.session_id) ||
     (typeof body.conversation_id === 'string' && body.conversation_id) ||
     null;
 
-  if (meta) model = 'auto';
+  let preferredChain: ProviderToggle[] | null = null;
+  let modelByProvider: Record<string, string> | null = null;
+
+  if (meta && !body.model?.startsWith('mode/')) {
+    const mini = await resolveMiniRouteChain();
+    mode = mini.mode;
+    preferredChain = mini.chain;
+    modelByProvider = Object.keys(mini.modelByProvider).length
+      ? mini.modelByProvider
+      : null;
+    model = 'auto';
+  } else if (meta) {
+    model = 'auto';
+  }
 
   if (body.model?.startsWith('agent/')) {
     const agentId = body.model.slice('agent/'.length);
@@ -363,11 +379,59 @@ async function buildContext(body: ChatBody, headerMode: string | null | undefine
       role = agent.id;
       lane = agent.id;
       mode = agent.mode;
-      model = agent.model === 'auto' ? 'auto' : agent.model;
+      if (agent.model === 'auto') {
+        model = 'auto';
+        const mini = await resolveMiniRouteChain();
+        preferredChain = mini.chain;
+        modelByProvider = Object.keys(mini.modelByProvider).length
+          ? mini.modelByProvider
+          : null;
+      } else {
+        model = agent.model;
+        preferredChain = null;
+        modelByProvider = null;
+      }
+    }
+  } else {
+    const officeRole = role ?? lane;
+    if (officeRole) {
+      const agent = (await listAgents()).find((a) => a.id === officeRole && a.enabled);
+      if (agent) {
+        role = agent.id;
+        lane = agent.id;
+        mode = agent.mode;
+        if (agent.model === 'auto') {
+          if (!isMetaModel(model ?? 'auto') && model !== 'auto') {
+            // Keep explicit upstream model from Office session when set.
+          } else {
+            const mini = await resolveMiniRouteChain();
+            mode = mini.mode;
+            preferredChain = mini.chain;
+            modelByProvider = Object.keys(mini.modelByProvider).length
+              ? mini.modelByProvider
+              : null;
+            model = 'auto';
+          }
+        } else {
+          model = agent.model;
+          preferredChain = null;
+          modelByProvider = null;
+        }
+      }
     }
   }
 
-  return { mode, role, lane, model, requestedModel, meta, sessionKey };
+  return {
+    mode,
+    role,
+    lane,
+    model,
+    requestedModel,
+    meta,
+    sessionKey,
+    preferredChain,
+    modelByProvider,
+  };
 }
 
 async function writeSse(

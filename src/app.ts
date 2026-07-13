@@ -13,6 +13,7 @@ import { authRouter } from './routes/auth.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { keysRouter, pricingRouter, usageRouter } from './routes/keys.js';
 import { chatRouter } from './routes/chat.js';
+import { officeRouter } from './routes/office.js';
 import { oauthRouter } from './routes/oauth.js';
 import './oauth/handlers/index.js';
 import { DOCS_CATALOG } from './docs/catalog.js';
@@ -53,6 +54,7 @@ export function createApp(_config: Config) {
   app.use('/api/pricing', requireAdmin, pricingRouter);
   app.use('/api/usage', requireAdmin, usageRouter);
   app.use('/api/settings', requireAdmin, settingsRouter);
+  app.use('/api/office', requireAdmin, officeRouter);
   app.use('/api', requireAdmin, adminRouter);
 
   const publicCandidates = [

@@ -15,6 +15,12 @@ import { getActiveConfig } from '../lib/config.js';
 import { HUB_MODES, MODE_PROFILES } from '../types.js';
 import type { HubMode } from '../types.js';
 import { buildFallbackChain } from '../services/mode-router.js';
+import {
+  getMiniRouteConfig,
+  setMiniRouteConfig,
+  resolveMiniRouteChain,
+  type MiniRouteCandidate,
+} from '../services/mini-route.js';
 import { maskSecret } from '../lib/crypto.js';
 import {
   classifyVerifyError,
@@ -732,6 +738,65 @@ adminRouter.post('/providers/:id/disable', async (req, res, next) => {
 adminRouter.get('/agents', async (_req, res, next) => {
   try {
     res.json({ agents: await listAgents() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.get('/mini-route', async (_req, res, next) => {
+  try {
+    const config = await getMiniRouteConfig();
+    const resolved = await resolveMiniRouteChain(config);
+    res.json({
+      modelId: 'helmora-mini-1.0',
+      displayName: 'Helmora Mini 1.0',
+      config,
+      resolved: {
+        mode: resolved.mode,
+        providerIds: resolved.chain.map((p) => p.id),
+        modelByProvider: resolved.modelByProvider,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.put('/mini-route', async (req, res, next) => {
+  try {
+    const schema = z.object({
+      enabled: z.boolean().optional(),
+      mode: z.enum(HUB_MODES as [HubMode, ...HubMode[]]).optional(),
+      fallbackToModeChain: z.boolean().optional(),
+      candidates: z
+        .array(
+          z.object({
+            providerId: z.string().min(1),
+            modelId: z.string().min(1).nullable().optional(),
+          })
+        )
+        .optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: parsed.error.message, type: 'validation_error' } });
+      return;
+    }
+    const config = await setMiniRouteConfig({
+      ...parsed.data,
+      candidates: parsed.data.candidates as MiniRouteCandidate[] | undefined,
+    });
+    const resolved = await resolveMiniRouteChain(config);
+    res.json({
+      modelId: 'helmora-mini-1.0',
+      displayName: 'Helmora Mini 1.0',
+      config,
+      resolved: {
+        mode: resolved.mode,
+        providerIds: resolved.chain.map((p) => p.id),
+        modelByProvider: resolved.modelByProvider,
+      },
+    });
   } catch (err) {
     next(err);
   }

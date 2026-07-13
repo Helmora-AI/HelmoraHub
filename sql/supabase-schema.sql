@@ -30,6 +30,7 @@ create table if not exists public.helmora_providers (
   protocol text not null default 'openai',
   auth_style text not null default 'bearer',
   benchmark_model text,
+  pinned_models jsonb not null default '[]'::jsonb,
   verify_status text not null default 'never',
   verify_error text,
   verified_at bigint,
@@ -44,6 +45,7 @@ create table if not exists public.helmora_providers (
 alter table public.helmora_providers add column if not exists protocol text not null default 'openai';
 alter table public.helmora_providers add column if not exists auth_style text not null default 'bearer';
 alter table public.helmora_providers add column if not exists benchmark_model text;
+alter table public.helmora_providers add column if not exists pinned_models jsonb not null default '[]'::jsonb;
 alter table public.helmora_providers add column if not exists verify_status text not null default 'never';
 alter table public.helmora_providers add column if not exists verify_error text;
 alter table public.helmora_providers add column if not exists verified_at bigint;

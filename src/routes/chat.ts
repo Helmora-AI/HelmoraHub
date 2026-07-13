@@ -5,7 +5,7 @@ import { requireAdminSession } from '../middleware/requireAdminSession.js';
 import { resolveMode } from '../services/mode-router.js';
 import { routeChat, routeChatStream } from '../services/tier-router.js';
 import { listProviders } from '../db/index.js';
-import { HUB_MODES, type HubMode } from '../types.js';
+import { HUB_MODES, type HubMode, type ProviderToggle } from '../types.js';
 import { isMetaModel, type TokenUsage } from '../keys/types.js';
 import { usdToMicros } from '../keys/types.js';
 import {
@@ -25,6 +25,7 @@ import {
   guardOutputText,
 } from '../guardrail/index.js';
 import { resolveRouteIdentity, prepareUpstreamMessages } from '../services/identity-context.js';
+import { resolveMiniRouteChain } from '../services/mini-route.js';
 import { mountChatHistoryRoutes } from './chat-history.js';
 
 export const chatRouter = Router();
@@ -69,6 +70,8 @@ type ResolvedChatModel = {
   upstreamModel: string;
   mode: HubMode;
   onlyProviderId: string | null;
+  preferredChain: ProviderToggle[] | null;
+  modelByProvider: Record<string, string> | null;
   meta: boolean;
   thinkingRequested: boolean;
   thinkingApplied: boolean;
@@ -98,14 +101,18 @@ async function resolveChatModel(
   }
 
   if (modelRef === 'auto' || isMetaModel(modelRef)) {
-    const mode = await resolveMode(null);
+    const mini = await resolveMiniRouteChain();
     return {
       ok: true,
       value: {
         requestedModel: modelRef,
         upstreamModel: 'auto',
-        mode,
+        mode: mini.mode,
         onlyProviderId: null,
+        preferredChain: mini.chain,
+        modelByProvider: Object.keys(mini.modelByProvider).length
+          ? mini.modelByProvider
+          : null,
         meta: true,
         thinkingRequested,
         thinkingApplied,
@@ -124,6 +131,8 @@ async function resolveChatModel(
         upstreamModel: 'auto',
         mode,
         onlyProviderId: null,
+        preferredChain: null,
+        modelByProvider: null,
         meta: true,
         thinkingRequested,
         thinkingApplied,
@@ -165,6 +174,8 @@ async function resolveChatModel(
       upstreamModel: row.modelId,
       mode,
       onlyProviderId: row.providerId,
+      preferredChain: null,
+      modelByProvider: null,
       meta: false,
       thinkingRequested,
       thinkingApplied,
@@ -303,6 +314,8 @@ chatRouter.post('/completions', async (req, res, next) => {
     const opts = {
       mode: ctx.mode,
       onlyProviderId: ctx.onlyProviderId,
+      preferredChain: ctx.preferredChain,
+      modelByProvider: ctx.modelByProvider,
       sessionKey: null as string | null,
       identity: identityResolved.identity,
     };

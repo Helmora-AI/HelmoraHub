@@ -20,6 +20,8 @@ If you previously applied the old CtrlHub schema, run [`../rename-ctrlhub-to-hel
 
 If you already applied an older `supabase-schema.sql` and only need new Playground chat tables, paste and run the full contents of [`002_chat_sessions.sql`](./002_chat_sessions.sql) (no `\i`).
 
+If `updateProvider` fails with missing `pinned_models`, run [`003_pinned_models.sql`](./003_pinned_models.sql).
+
 **Hybrid note:** Playground chat history is stored in Hub **local SQLite workspace** (same as usage events), not in browser `localStorage`. The Supabase chat tables keep schema parity with `SupabaseConfigStore`; hybrid mode does not require `002` for Playground to work after upgrading Hub.
 
 ## Versioned copies (optional)

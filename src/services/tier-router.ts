@@ -36,6 +36,13 @@ export interface RouteChatOptions {
   signal?: AbortSignal;
   /** Pin routing to this provider only (catalog model selection). */
   onlyProviderId?: string | null;
+  /**
+   * Prefixed provider chain (e.g. Helmora Mini multi-model pool).
+   * When set, replaces the mode tier chain as the base order.
+   */
+  preferredChain?: ProviderToggle[] | null;
+  /** Per-provider upstream model pin (Mini candidate modelId). */
+  modelByProvider?: Record<string, string> | null;
   /** Attempt-scoped Helmora identity injection (rev 2). */
   identity?: RouteChatIdentityOptions | null;
 }
@@ -99,6 +106,16 @@ export type RouteChatStreamResult =
 const DEFAULT_COOLDOWN_SECONDS = 30;
 const RPM_SOFT_LIMIT = 60;
 
+function applyModelPin(
+  request: ChatRequest,
+  provider: ProviderToggle,
+  modelByProvider: Record<string, string> | null | undefined
+): ChatRequest {
+  const pinned = modelByProvider?.[provider.id];
+  if (!pinned) return request;
+  return { ...request, model: pinned };
+}
+
 async function prepareChain(
   options: RouteChatOptions,
   request?: ChatRequest
@@ -108,7 +125,10 @@ async function prepareChain(
 }> {
   const rate = rates();
   const preferVision = request ? requestHasImages(request.messages) : false;
-  let chain = await buildFallbackChain(options.mode, { preferVision });
+  let chain =
+    options.preferredChain && options.preferredChain.length > 0
+      ? options.preferredChain.filter((p) => p.enabled)
+      : await buildFallbackChain(options.mode, { preferVision });
   const attempts: Array<{ providerId: string; status: number; error?: string }> = [];
 
   if (options.onlyProviderId) {
@@ -192,8 +212,13 @@ export async function routeChat(
       continue;
     }
 
-    const attemptReq = withAttemptIdentity(
+    const pinnedReq = applyModelPin(
       { ...request, stream: false },
+      provider,
+      options.modelByProvider
+    );
+    const attemptReq = withAttemptIdentity(
+      pinnedReq,
       provider,
       options.identity
     );
@@ -299,8 +324,13 @@ export async function routeChatStream(
       continue;
     }
 
-    const attemptReq = withAttemptIdentity(
+    const pinnedReq = applyModelPin(
       { ...request, stream: true },
+      provider,
+      options.modelByProvider
+    );
+    const attemptReq = withAttemptIdentity(
+      pinnedReq,
       provider,
       options.identity
     );

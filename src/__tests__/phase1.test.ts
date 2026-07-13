@@ -82,6 +82,16 @@ describe('Claw3D runtime contract', () => {
     expect(res.body.models).toHaveProperty('auto');
   });
 
+  it('GET /api/office/runtime (admin)', async () => {
+    const res = await request(app)
+      .get('/api/office/runtime')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.state.identity.name).toBe('Helmora Office');
+    expect(res.body.state.agents.length).toBeGreaterThanOrEqual(6);
+  });
+
   it('GET /providers and /models serve HTML', async () => {
     const providers = await request(app).get('/providers');
     expect(providers.status).toBe(200);
@@ -114,7 +124,8 @@ describe('OpenAI-compatible /v1', () => {
         session_id: 'test-session-1',
       });
     expect(res.status).toBe(200);
-    expect(res.headers['x-ctrl-mode']).toBe('economy');
+    // model=auto → Helmora Mini route (default mode smart), header mode not used
+    expect(res.headers['x-ctrl-mode']).toBe('smart');
     expect(res.body.choices[0].message.content).toContain('Helmora AI demo');
   });
 
