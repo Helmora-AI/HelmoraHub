@@ -45,7 +45,16 @@ fi
 [[ -f package.json ]] || die "package.json still missing after bootstrap"
 
 # --- sync ---
+# npm install on VPS often rewrites package-lock.json (platform optional deps /
+# caret bumps). That dirties the tree and makes the next git pull abort.
 if [[ -d .git ]]; then
+  if ! git diff --quiet -- package-lock.json 2>/dev/null \
+    || ! git diff --cached --quiet -- package-lock.json 2>/dev/null; then
+    log "discarding local package-lock.json drift (from last npm install)…"
+    git checkout -- package-lock.json 2>/dev/null \
+      || git restore --source=HEAD --worktree --staged -- package-lock.json 2>/dev/null \
+      || true
+  fi
   log "git pull…"
   git pull || log "git pull failed (continuing with local tree)"
 fi
@@ -75,7 +84,12 @@ if $NPM approve-scripts --help >/dev/null 2>&1; then
     || true
 fi
 
-$NPM install --foreground-scripts
+# Prefer npm ci when lockfile is present so install does not rewrite it.
+if [[ -f package-lock.json ]]; then
+  $NPM ci --foreground-scripts || $NPM install --foreground-scripts
+else
+  $NPM install --foreground-scripts
+fi
 
 ensure_sqlite_binding() {
   find node_modules/better-sqlite3 -name 'better_sqlite3.node' 2>/dev/null | head -n 1
