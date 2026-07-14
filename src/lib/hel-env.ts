@@ -46,6 +46,7 @@ export const HEL_TABLE = {
   settings: 'helmora_settings',
   providers: 'helmora_providers',
   agents: 'helmora_agents',
+  connectorCredentials: 'helmora_connector_credentials',
 } as const;
 
 export function isHelSessionToken(token: string): boolean {

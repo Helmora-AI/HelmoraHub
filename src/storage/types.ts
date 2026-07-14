@@ -88,6 +88,19 @@ export interface ConfigStore extends ChatStoreMethods {
   getAgent(id: string): Promise<AgentConfig | null>;
   updateAgent(id: string, patch: AgentPatch): Promise<AgentConfig | null>;
 
+  getConnectorCredentialRecord(
+    connectorId: RegisteredConnectorId
+  ): Promise<ConnectorCredentialRecord | null>;
+  putConnectorCredentialRecord(record: ConnectorCredentialRecord): Promise<void>;
+  getConnectorCredentialSecret(connectorId: RegisteredConnectorId): Promise<string | null>;
+  getConnectorCredentialState(
+    connectorId: RegisteredConnectorId
+  ): Promise<ConnectorCredentialState>;
+  updateConnectorCredential(
+    connectorId: RegisteredConnectorId,
+    update: ConnectorCredentialUpdate
+  ): Promise<ConnectorCredentialState>;
+
   listApiKeys(): Promise<ApiKeyPublic[]>;
   getApiKeyById(id: string): Promise<ApiKeyRecord | null>;
   findApiKeyByHash(keyHash: string): Promise<ApiKeyRecord | null>;

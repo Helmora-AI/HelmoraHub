@@ -6,7 +6,12 @@ export const CONTROL_FAILURES_TO_DEGRADED = 2;
 export type ControlPlaneState = 'online' | 'degraded' | 'reconciling';
 export type ControlVaultHealth = 'fresh' | 'stale' | 'replaying';
 
-export type ControlOutboxEntity = 'api_key' | 'provider' | 'agent' | 'setting';
+export type ControlOutboxEntity =
+  | 'api_key'
+  | 'provider'
+  | 'agent'
+  | 'setting'
+  | 'connector_credential';
 export type ControlOutboxAction = 'add' | 'modify' | 'delete';
 
 export type ControlOutboxOp = {

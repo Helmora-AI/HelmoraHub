@@ -73,6 +73,17 @@ describe('HybridConfigStore online', () => {
     expect(workspace!.getControlVault().getProvider('groq')?.label).toBe('Groq Mirror');
   });
 
+  it('mirrors encrypted connector credentials after an online control write', async () => {
+    const h = openHybrid();
+    const state = await h.updateConnectorCredential('tinyfish', { secret: 'tf-online-4321' });
+
+    expect(state).toMatchObject({ credentialConfigured: true, credentialHint: '…4321' });
+    expect(await control!.getConnectorCredentialSecret('tinyfish')).toBe('tf-online-4321');
+    const mirrored = workspace!.getControlVault().getConnectorCredential('tinyfish');
+    expect(mirrored?.encryptedSecret).toMatch(/^enc:v1:/);
+    expect(JSON.stringify(mirrored)).not.toContain('tf-online-4321');
+  });
+
   it('keeps usage on workspace only (never control remote)', async () => {
     const h = openHybrid();
     await h.recordUsage({

@@ -131,6 +131,27 @@ describe('HybridConfigStore reconcile', () => {
     expect((await controlInner!.getProvider('groq'))?.label).toBe('Twice');
   });
 
+  it('replays encrypted connector rotation and clear without plaintext outbox payloads', async () => {
+    const h = await openSyncedHybrid();
+    forceDegraded(h);
+
+    await h.updateConnectorCredential('tinyfish', { secret: 'tf-reconcile-2468' });
+    const setOp = workspace!.getControlVault().listPendingOutbox().find(
+      (item) => item.entity === 'connector_credential'
+    );
+    expect(JSON.stringify(setOp)).not.toContain('tf-reconcile-2468');
+
+    await h.reconcile();
+    expect(await controlInner!.getConnectorCredentialSecret('tinyfish')).toBe('tf-reconcile-2468');
+    expect(await h.getConnectorCredentialSecret('tinyfish')).toBe('tf-reconcile-2468');
+
+    forceDegraded(h);
+    await h.updateConnectorCredential('tinyfish', { secret: null });
+    await h.reconcile();
+    expect(await controlInner!.getConnectorCredentialSecret('tinyfish')).toBeNull();
+    expect(workspace!.getControlVault().getConnectorCredential('tinyfish')).toBeNull();
+  });
+
   it('rejects updateProvider while reconciling', async () => {
     const h = await openSyncedHybrid();
     h.setPlaneForTests({

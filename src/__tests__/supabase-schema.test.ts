@@ -32,6 +32,8 @@ describe('supabase-schema helpers', () => {
     expect(resolved.replace(/\\/g, '/')).toMatch(/sql\/supabase-schema\.sql$/);
     expect(sql).toContain('create table if not exists public.helmora_settings');
     expect(sql).toContain('helmora_providers');
+    expect(sql).toContain('create table if not exists public.helmora_connector_credentials');
+    expect(sql).toContain('encrypted_secret text not null');
   });
 
   it('exposes API hints', () => {

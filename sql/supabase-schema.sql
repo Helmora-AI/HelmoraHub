@@ -67,16 +67,28 @@ create table if not exists public.helmora_agents (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.helmora_connector_credentials (
+  connector_id text primary key,
+  encrypted_secret text not null,
+  encryption_version integer not null check (encryption_version = 1),
+  configured_at bigint not null,
+  updated_at bigint not null
+);
+
 -- Lock down: only service_role (server) should access these tables.
 alter table public.helmora_settings enable row level security;
 alter table public.helmora_providers enable row level security;
 alter table public.helmora_agents enable row level security;
+alter table public.helmora_connector_credentials enable row level security;
 
 -- No policies for anon/authenticated → denied by default.
 -- service_role bypasses RLS.
 
 comment on column public.helmora_providers.api_key_encrypted is
   'AES-256-GCM payload encrypted with ENCRYPTION_KEY; decrypt only in Helmora Hub process memory';
+
+comment on column public.helmora_connector_credentials.encrypted_secret is
+  'AES-256-GCM connector credential; never plaintext and never exposed through public DTOs';
 
 -- API keys currently use settings JSON blobs (helmora_settings key api_keys_v1,
 -- plus usage_events_v1 / pricing_overrides / api_key_bootstrap) until dedicated

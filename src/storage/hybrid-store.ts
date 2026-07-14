@@ -37,7 +37,16 @@ import {
 } from './control-plane.js';
 import type { ControlVault } from './control-vault.js';
 import type { SqliteConfigStore } from './sqlite-store.js';
-import type { AgentPatch, ApiKeyPatch, ConfigStore, ProviderPatch } from './types.js';
+import type {
+  AgentPatch,
+  ApiKeyPatch,
+  ConfigStore,
+  ConnectorCredentialRecord,
+  ConnectorCredentialState,
+  ConnectorCredentialUpdate,
+  ProviderPatch,
+} from './types.js';
+import type { RegisteredConnectorId } from '../tools/types.js';
 import type {
   AppendChatMessageInput,
   CreateChatSessionInput,
@@ -195,6 +204,9 @@ export class HybridConfigStore implements ConfigStore {
     }
 
     for (const a of await store.listAgents()) this.vault.upsertAgent(a);
+    const connectorCredential = await store.getConnectorCredentialRecord('tinyfish');
+    if (connectorCredential) this.vault.upsertConnectorCredential(connectorCredential);
+    else this.vault.deleteConnectorCredential('tinyfish');
     const mode = await store.getActiveMode();
     this.vault.setSetting('active_mode', mode);
     this.vault.setMeta({ lastSyncAt: Date.now(), generation: this.vault.getMeta().generation + 1 });
@@ -302,6 +314,22 @@ export class HybridConfigStore implements ConfigStore {
       return;
     }
 
+    if (entity === 'connector_credential' && action === 'modify') {
+      const record = payload.record as ConnectorCredentialRecord | undefined;
+      if (!record || typeof record !== 'object' || record.connectorId !== entityId) {
+        throw new Error(`Outbox connector credential ${entityId}: encrypted record missing`);
+      }
+      await this.control.putConnectorCredentialRecord(record);
+      return;
+    }
+
+    if (entity === 'connector_credential' && action === 'delete') {
+      await this.control.updateConnectorCredential(entityId as RegisteredConnectorId, {
+        secret: null,
+      });
+      return;
+    }
+
     // Unknown entity/action combo — ignore safely
   }
 
@@ -370,6 +398,81 @@ export class HybridConfigStore implements ConfigStore {
     await this.withRemoteControl(async () => {
       await this.controlStore().setSetting(key, value);
       if (this.hybrid) this.vault.setSetting(key, value);
+    });
+  }
+
+  async getConnectorCredentialRecord(
+    connectorId: RegisteredConnectorId,
+  ): Promise<ConnectorCredentialRecord | null> {
+    if (this.useVaultReads()) return this.vault.getConnectorCredential(connectorId);
+    return this.withRemoteControl(() =>
+      this.controlStore().getConnectorCredentialRecord(connectorId)
+    );
+  }
+
+  async putConnectorCredentialRecord(record: ConnectorCredentialRecord): Promise<void> {
+    this.assertNotReconciling();
+    if (this.isDegraded()) {
+      await this.workspace.putConnectorCredentialRecord(record);
+      this.enqueue('connector_credential', 'modify', record.connectorId, {
+        record: record as unknown as Record<string, unknown>,
+      });
+      return;
+    }
+    await this.withRemoteControl(async () => {
+      await this.controlStore().putConnectorCredentialRecord(record);
+      if (this.hybrid) this.vault.upsertConnectorCredential(record);
+    });
+  }
+
+  async getConnectorCredentialSecret(
+    connectorId: RegisteredConnectorId,
+  ): Promise<string | null> {
+    if (this.useVaultReads()) {
+      return this.workspace.getConnectorCredentialSecret(connectorId);
+    }
+    return this.withRemoteControl(() =>
+      this.controlStore().getConnectorCredentialSecret(connectorId)
+    );
+  }
+
+  async getConnectorCredentialState(
+    connectorId: RegisteredConnectorId,
+  ): Promise<ConnectorCredentialState> {
+    if (this.useVaultReads()) {
+      return this.workspace.getConnectorCredentialState(connectorId);
+    }
+    return this.withRemoteControl(() =>
+      this.controlStore().getConnectorCredentialState(connectorId)
+    );
+  }
+
+  async updateConnectorCredential(
+    connectorId: RegisteredConnectorId,
+    update: ConnectorCredentialUpdate,
+  ): Promise<ConnectorCredentialState> {
+    this.assertNotReconciling();
+    if (this.isDegraded()) {
+      const state = await this.workspace.updateConnectorCredential(connectorId, update);
+      if (update.secret === undefined) return state;
+      const record = await this.workspace.getConnectorCredentialRecord(connectorId);
+      if (record) {
+        this.enqueue('connector_credential', 'modify', connectorId, {
+          record: record as unknown as Record<string, unknown>,
+        });
+      } else {
+        this.enqueue('connector_credential', 'delete', connectorId, {});
+      }
+      return state;
+    }
+    return this.withRemoteControl(async () => {
+      const state = await this.controlStore().updateConnectorCredential(connectorId, update);
+      if (this.hybrid) {
+        const record = await this.controlStore().getConnectorCredentialRecord(connectorId);
+        if (record) this.vault.upsertConnectorCredential(record);
+        else this.vault.deleteConnectorCredential(connectorId);
+      }
+      return state;
     });
   }
 

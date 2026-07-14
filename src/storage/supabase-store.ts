@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Config } from '../lib/config.js';
 import { HEL_TABLE } from '../lib/hel-env.js';
 import { generateApiKey, randomId } from '../lib/auth.js';
-import { decryptSecret, encryptSecret } from '../lib/crypto.js';
+import { decryptSecret, encryptSecret, isEncryptedSecret } from '../lib/crypto.js';
 import { formatSupabaseControlError } from '../lib/supabase-schema.js';
 import {
   apiKeyHint,
@@ -34,7 +34,16 @@ import {
   shouldForceCatalogOwned,
   type SeedExistingSnapshot,
 } from './provider-seed-sync.js';
-import type { AgentPatch, ApiKeyPatch, ConfigStore, ProviderPatch } from './types.js';
+import type {
+  AgentPatch,
+  ApiKeyPatch,
+  ConfigStore,
+  ConnectorCredentialRecord,
+  ConnectorCredentialState,
+  ConnectorCredentialUpdate,
+  ProviderPatch,
+} from './types.js';
+import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   CHAT_ACTIVE_SETTING_KEY,
   supabaseAppendChatMessages,
@@ -116,6 +125,13 @@ type AgentRow = {
   model: string;
   mode: string;
   desk_id: string | null;
+};
+type ConnectorCredentialRow = {
+  connector_id: RegisteredConnectorId;
+  encrypted_secret: string;
+  encryption_version: number;
+  configured_at: number;
+  updated_at: number;
 };
 
 function parseJsonArray<T>(value: T[] | string | null | undefined, fallback: T[]): T[] {
@@ -463,6 +479,115 @@ export class SupabaseConfigStore implements ConfigStore {
       updated_at: new Date().toISOString(),
     });
     if (error) throw formatSupabaseControlError('setSetting', error.message);
+  }
+
+  async getConnectorCredentialRecord(
+    connectorId: RegisteredConnectorId,
+  ): Promise<ConnectorCredentialRecord | null> {
+    const { data, error } = await this.client
+      .from(HEL_TABLE.connectorCredentials)
+      .select('connector_id, encrypted_secret, encryption_version, configured_at, updated_at')
+      .eq('connector_id', connectorId)
+      .maybeSingle();
+    if (error) throw formatSupabaseControlError('getConnectorCredentialRecord', error.message);
+    const row = data as ConnectorCredentialRow | null;
+    if (!row) return null;
+    if (row.encryption_version !== 1) {
+      throw new Error('Unsupported connector credential encryption version');
+    }
+    return {
+      connectorId: row.connector_id,
+      encryptedSecret: row.encrypted_secret,
+      encryptionVersion: 1,
+      configuredAt: Number(row.configured_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  async putConnectorCredentialRecord(record: ConnectorCredentialRecord): Promise<void> {
+    if (!isEncryptedSecret(record.encryptedSecret)) {
+      throw new Error('Connector credential is not encrypted');
+    }
+    const { error } = await this.client.from(HEL_TABLE.connectorCredentials).upsert({
+      connector_id: record.connectorId,
+      encrypted_secret: record.encryptedSecret,
+      encryption_version: record.encryptionVersion,
+      configured_at: record.configuredAt,
+      updated_at: record.updatedAt,
+    });
+    if (error) throw formatSupabaseControlError('putConnectorCredentialRecord', error.message);
+  }
+
+  async getConnectorCredentialSecret(connectorId: RegisteredConnectorId): Promise<string | null> {
+    const record = await this.getConnectorCredentialRecord(connectorId);
+    if (!record) return null;
+    if (!isEncryptedSecret(record.encryptedSecret)) {
+      throw new Error('Connector credential is not encrypted');
+    }
+    return decryptSecret(record.encryptedSecret, this.encryptionKey);
+  }
+
+  async getConnectorCredentialState(
+    connectorId: RegisteredConnectorId,
+  ): Promise<ConnectorCredentialState> {
+    const record = await this.getConnectorCredentialRecord(connectorId);
+    if (!record) return {
+      connectorId,
+      credentialConfigured: false,
+      credentialHint: null,
+      configuredAt: null,
+      updatedAt: null,
+    };
+    if (!isEncryptedSecret(record.encryptedSecret)) {
+      throw new Error('Connector credential is not encrypted');
+    }
+    const secret = decryptSecret(record.encryptedSecret, this.encryptionKey);
+    return {
+      connectorId,
+      credentialConfigured: true,
+      credentialHint: secret ? `…${secret.slice(-4)}` : null,
+      configuredAt: record.configuredAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+
+  async updateConnectorCredential(
+    connectorId: RegisteredConnectorId,
+    update: ConnectorCredentialUpdate,
+  ): Promise<ConnectorCredentialState> {
+    const existing = await this.getConnectorCredentialRecord(connectorId);
+    if (update.secret === undefined) return this.getConnectorCredentialState(connectorId);
+    if (update.secret === null) {
+      const { error } = await this.client
+        .from(HEL_TABLE.connectorCredentials)
+        .delete()
+        .eq('connector_id', connectorId);
+      if (error) throw formatSupabaseControlError('clearConnectorCredential', error.message);
+      return {
+        connectorId,
+        credentialConfigured: false,
+        credentialHint: null,
+        configuredAt: null,
+        updatedAt: null,
+      };
+    }
+    const secret = update.secret.trim();
+    if (!secret) throw new Error('Connector credential must not be empty');
+    const now = Date.now();
+    await this.putConnectorCredentialRecord({
+      connectorId,
+      encryptedSecret: encryptSecret(secret, this.encryptionKey),
+      encryptionVersion: 1,
+      configuredAt: existing?.configuredAt ?? now,
+      updatedAt: now,
+    });
+    return {
+      connectorId,
+      credentialConfigured: true,
+      credentialHint: `…${secret.slice(-4)}`,
+      configuredAt: existing?.configuredAt ?? now,
+      updatedAt: now,
+    };
   }
 
   async getActiveMode(): Promise<HubMode> {

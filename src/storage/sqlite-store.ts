@@ -193,6 +193,21 @@ export class SqliteConfigStore implements ConfigStore {
     return decryptSecret(record.encryptedSecret, encryptionKey);
   }
 
+  async getConnectorCredentialRecord(
+    connectorId: RegisteredConnectorId,
+  ): Promise<import('./types.js').ConnectorCredentialRecord | null> {
+    return this.vault.getConnectorCredential(connectorId);
+  }
+
+  async putConnectorCredentialRecord(
+    record: import('./types.js').ConnectorCredentialRecord,
+  ): Promise<void> {
+    if (!isEncryptedSecret(record.encryptedSecret)) {
+      throw new Error('Connector credential is not encrypted');
+    }
+    this.vault.upsertConnectorCredential(record);
+  }
+
   async getConnectorCredentialState(
     connectorId: RegisteredConnectorId,
   ): Promise<ConnectorCredentialState> {

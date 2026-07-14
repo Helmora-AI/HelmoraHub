@@ -146,4 +146,21 @@ describe('HybridConfigStore degraded', () => {
       workspace!.getControlVault().listPendingOutbox().some((o) => o.entity === 'provider')
     ).toBe(true);
   });
+
+  it('queues only encrypted connector credential material while degraded', async () => {
+    const h = await openSyncedHybrid();
+    let plane = createControlPlane();
+    plane = recordRemoteFailure(plane, 1);
+    plane = recordRemoteFailure(plane, 2);
+    h.setPlaneForTests(plane);
+
+    await h.updateConnectorCredential('tinyfish', { secret: 'tf-offline-secret' });
+
+    expect(await h.getConnectorCredentialSecret('tinyfish')).toBe('tf-offline-secret');
+    const pending = workspace!.getControlVault().listPendingOutbox();
+    const op = pending.find((item) => item.entity === 'connector_credential');
+    expect(op).toMatchObject({ action: 'modify', entityId: 'tinyfish' });
+    expect(JSON.stringify(op)).not.toContain('tf-offline-secret');
+    expect(JSON.stringify(op?.payload)).toContain('enc:v1:');
+  });
 });

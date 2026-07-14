@@ -5,6 +5,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import type { Config } from '../lib/config.js';
 import { SqliteConfigStore } from '../storage/sqlite-store.js';
+import { SupabaseConfigStore } from '../storage/supabase-store.js';
 
 describe('SQLite connector credential vault', () => {
   const stores: SqliteConfigStore[] = [];
@@ -119,5 +120,70 @@ describe('SQLite connector credential vault', () => {
     await expect(store.getConnectorCredentialSecret('tinyfish')).rejects.toThrow(
       'Connector credential is not encrypted'
     );
+  });
+});
+
+describe('Supabase connector credential vault', () => {
+  it('persists ciphertext, returns masked state, rotates, and clears through the dedicated table', async () => {
+    const config: Config = {
+      port: 0,
+      host: '127.0.0.1',
+      dataDir: '.',
+      dbPath: ':memory:',
+      apiKeyEnv: null,
+      upstreamBaseUrl: null,
+      upstreamApiKey: null,
+      upstreamModel: null,
+      encryptionKey: 'supabase-connector-vault-test-key',
+      storageBackend: 'supabase',
+      storageChoice: 'sql',
+      rateBackend: 'memory',
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseServiceRoleKey: 'service-role-test-only',
+      redisUrl: null,
+      publicUrl: null,
+      frontendUrl: null,
+    };
+    const store = new SupabaseConfigStore(config);
+    let row: Record<string, unknown> | null = null;
+    const client = {
+      from: (table: string) => {
+        expect(table).toBe('helmora_connector_credentials');
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }),
+          }),
+          upsert: async (value: Record<string, unknown>) => {
+            row = value;
+            return { error: null };
+          },
+          delete: () => ({
+            eq: async () => {
+              row = null;
+              return { error: null };
+            },
+          }),
+        };
+      },
+    };
+    (store as unknown as { client: typeof client }).client = client;
+
+    const created = await store.updateConnectorCredential('tinyfish', {
+      secret: 'tf-supabase-first-1111',
+    });
+    expect(created).toMatchObject({ credentialConfigured: true, credentialHint: '…1111' });
+    expect(JSON.stringify(row)).not.toContain('tf-supabase-first-1111');
+    expect(String(row?.encrypted_secret)).toMatch(/^enc:v1:/);
+    expect(await store.getConnectorCredentialSecret('tinyfish')).toBe('tf-supabase-first-1111');
+
+    const rotated = await store.updateConnectorCredential('tinyfish', {
+      secret: 'tf-supabase-next-2222',
+    });
+    expect(rotated.credentialHint).toBe('…2222');
+    expect(JSON.stringify(row)).not.toContain('tf-supabase-next-2222');
+
+    const cleared = await store.updateConnectorCredential('tinyfish', { secret: null });
+    expect(cleared.credentialConfigured).toBe(false);
+    expect(row).toBeNull();
   });
 });
