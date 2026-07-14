@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,6 +64,8 @@ describe('Tools admin API', () => {
       .toBe(401);
     expect((await request(app).put('/api/tools/connectors/tinyfish/credential').send({})).status)
       .toBe(401);
+    expect((await request(app).post('/api/tools/connectors/tinyfish/test')).status).toBe(401);
+    expect((await request(app).get('/api/tools/activity')).status).toBe(401);
   });
 
   it('returns a disabled default, immutable registry, masked credential state, and summaries', async () => {
@@ -178,5 +180,84 @@ describe('Tools admin API', () => {
     expect(conflicting.status).toBe(400);
     expect(JSON.stringify(conflicting.body)).not.toContain('must-not-store');
     expect(await getConfigStore().getConnectorCredentialSecret('tinyfish')).toBeNull();
+  });
+
+  it('tests TinyFish Search live without cache and exposes only safe bounded activity', async () => {
+    const draft = structuredClone(DEFAULT_TOOL_RUNTIME_CONFIG);
+    draft.enabled = true;
+    draft.connectors.tinyfish.enabled = true;
+    draft.orchestrator.primaryCatalogId = primaryCatalogId;
+    draft.orchestrator.fallbackCatalogId = fallbackCatalogId;
+    await request(app)
+      .put('/api/tools/config')
+      .set('X-Admin-Token', adminToken)
+      .send(draft);
+    const secret = 'tf-live-test-secret-1234';
+    await request(app)
+      .put('/api/tools/connectors/tinyfish/credential')
+      .set('X-Admin-Token', adminToken)
+      .send({ secret });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      expect(url.origin + url.pathname).toBe('https://api.search.tinyfish.ai/');
+      expect(url.searchParams.get('query')).toBe('TinyFish connectivity check');
+      return new Response(JSON.stringify({
+        query: 'TinyFish connectivity check',
+        results: [{ title: 'TinyFish', snippet: 'Healthy', url: 'https://www.tinyfish.ai/' }],
+      }), { status: 200 });
+    });
+
+    const first = await request(app)
+      .post('/api/tools/connectors/tinyfish/test')
+      .set('X-Admin-Token', adminToken);
+    const second = await request(app)
+      .post('/api/tools/connectors/tinyfish/test')
+      .set('X-Admin-Token', adminToken);
+
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      ok: true,
+      connectorId: 'tinyfish',
+      toolId: 'web_search',
+      cacheHit: false,
+      sourceCount: 1,
+    });
+    expect(first.body.health.status).toBe('ready');
+    expect(JSON.stringify(first.body)).not.toContain(secret);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // the second test bypassed the first result cache
+    fetchMock.mockRestore();
+
+    const activity = await request(app)
+      .get('/api/tools/activity?limit=1')
+      .set('X-Admin-Token', adminToken);
+    expect(activity.status).toBe(200);
+    expect(activity.body.items).toHaveLength(1);
+    expect(activity.body.items[0]).toMatchObject({
+      toolId: 'web_search',
+      connector: 'tinyfish',
+      source: 'admin_connector_test',
+      status: 'completed',
+    });
+    expect(activity.body.items[0]).not.toHaveProperty('arguments');
+    expect(activity.body.items[0]).not.toHaveProperty('content');
+    expect(activity.body.items[0]).not.toHaveProperty('rawUrl');
+    expect(JSON.stringify(activity.body)).not.toContain(secret);
+    expect(activity.body.nextCursor).toEqual(expect.any(String));
+
+    const nextPage = await request(app)
+      .get(`/api/tools/activity?limit=1&cursor=${encodeURIComponent(activity.body.nextCursor)}`)
+      .set('X-Admin-Token', adminToken);
+    expect(nextPage.status).toBe(200);
+    expect(nextPage.body.items).toHaveLength(1);
+    expect(nextPage.body.items[0].id).not.toBe(activity.body.items[0].id);
+
+    const invalidLimit = await request(app)
+      .get('/api/tools/activity?limit=1000')
+      .set('X-Admin-Token', adminToken);
+    expect(invalidLimit.status).toBe(400);
+    const invalidCursor = await request(app)
+      .get('/api/tools/activity?cursor=not-a-valid-cursor')
+      .set('X-Admin-Token', adminToken);
+    expect(invalidCursor.status).toBe(400);
   });
 });

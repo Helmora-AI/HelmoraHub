@@ -125,16 +125,17 @@ describe('Supabase tool-run audit', () => {
     const client = {
       from: (table: string) => {
         expect(table).toBe('helmora_tool_runs');
+        const query = {
+          order: () => query,
+          or: () => query,
+          limit: async (limit: number) => ({ data: rows.slice(0, limit), error: null }),
+        };
         return {
           insert: async (row: Record<string, unknown>) => {
             rows.push(row);
             return { error: null };
           },
-          select: () => ({
-            order: () => ({
-              limit: async (limit: number) => ({ data: rows.slice(0, limit), error: null }),
-            }),
-          }),
+          select: () => query,
         };
       },
     };

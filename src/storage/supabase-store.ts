@@ -43,6 +43,7 @@ import type {
   ConnectorCredentialUpdate,
   ProviderPatch,
   ToolRunCreate,
+  ToolRunListOptions,
   ToolRunRecord,
 } from './types.js';
 import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
@@ -971,13 +972,19 @@ export class SupabaseConfigStore implements ConfigStore {
     return record;
   }
 
-  async listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]> {
-    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
-    const { data, error } = await this.client
+  async listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]> {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+    let query = this.client
       .from(HEL_TABLE.toolRuns)
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('id', { ascending: false });
+    if (opts?.before) {
+      query = query.or(
+        `created_at.lt.${opts.before.createdAt},and(created_at.eq.${opts.before.createdAt},id.lt.${opts.before.id})`
+      );
+    }
+    const { data, error } = await query.limit(limit);
     if (error) throw formatSupabaseControlError('listToolRuns', error.message);
     return (data ?? []).map((row) => toolRunFromRow(row as Record<string, unknown>, {
       preserveRunning: this.liveToolRunIds.has(String((row as Record<string, unknown>).id)),

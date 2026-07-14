@@ -44,6 +44,10 @@ export type ToolRunRecord = {
 };
 
 export type ToolRunCreate = Omit<ToolRunRecord, 'id' | 'createdAt'> & { id?: string };
+export type ToolRunListOptions = {
+  limit?: number;
+  before?: { createdAt: number; id: string };
+};
 
 export type ConnectorCredentialRecord = {
   connectorId: RegisteredConnectorId;
@@ -140,7 +144,7 @@ export interface ConfigStore extends ChatStoreMethods {
   recordUsage(event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }): Promise<UsageEvent>;
   listUsage(opts?: { apiKeyId?: string; limit?: number }): Promise<UsageEvent[]>;
   recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord>;
-  listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]>;
+  listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]>;
 
   getPricingOverrides(): Promise<Record<string, ModelPricing>>;
   setPricingOverrides(map: Record<string, ModelPricing>): Promise<void>;

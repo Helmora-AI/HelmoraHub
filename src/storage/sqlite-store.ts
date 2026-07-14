@@ -47,6 +47,7 @@ import type {
   ConnectorCredentialUpdate,
   ProviderPatch,
   ToolRunCreate,
+  ToolRunListOptions,
   ToolRunRecord,
 } from './types.js';
 import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
@@ -1232,11 +1233,17 @@ export class SqliteConfigStore implements ConfigStore {
     return record;
   }
 
-  async listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]> {
-    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
-    const rows = this.db.prepare(
-      `SELECT * FROM tool_runs ORDER BY created_at DESC, id DESC LIMIT ?`
-    ).all(limit) as Array<Record<string, unknown>>;
+  async listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]> {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+    const rows = (opts?.before
+      ? this.db.prepare(
+          `SELECT * FROM tool_runs
+           WHERE created_at < ? OR (created_at = ? AND id < ?)
+           ORDER BY created_at DESC, id DESC LIMIT ?`
+        ).all(opts.before.createdAt, opts.before.createdAt, opts.before.id, limit)
+      : this.db.prepare(
+          `SELECT * FROM tool_runs ORDER BY created_at DESC, id DESC LIMIT ?`
+        ).all(limit)) as Array<Record<string, unknown>>;
     return rows.map((row) => toolRunFromRow(row, {
       preserveRunning: this.liveToolRunIds.has(String(row.id)),
     }));

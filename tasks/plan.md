@@ -295,14 +295,14 @@ Canonical bounded tool loop
 **Description:** Mount the remaining authenticated operational endpoints after the connector executor and audit store exist: one exact TinyFish connectivity test and bounded recent activity reads.
 
 **Acceptance criteria:**
-- [ ] `POST /api/tools/connectors/tinyfish/test` requires an admin session, bypasses result cache, and uses one fixed harmless Search query; it never invokes Fetch, Agent, or Browser.
-- [ ] The test still passes through timeout, limiter, retry budget, redaction, and audit policy, with audit source `admin_connector_test`.
-- [ ] Test responses expose only redacted health/result metadata and create one safe audit record without the credential or raw upstream body.
-- [ ] `GET /api/tools/activity` requires an admin session, validates bounded limit/cursor input, and returns allowlisted audit fields only.
+- [x] `POST /api/tools/connectors/tinyfish/test` requires an admin session, bypasses result cache, and uses one fixed harmless Search query; it never invokes Fetch, Agent, or Browser.
+- [x] The test still passes through timeout, limiter, retry budget, redaction, and audit policy, with audit source `admin_connector_test`.
+- [x] Test responses expose only redacted health/result metadata and create one safe audit record without the credential or raw upstream body.
+- [x] `GET /api/tools/activity` requires an admin session, validates bounded limit/cursor input, and returns allowlisted audit fields only.
 
 **Verification:**
-- [ ] RED then GREEN: focused connector-test/activity cases in `tools-admin.test.ts`
-- [ ] Credential redaction and admin-auth regression tests pass
+- [x] RED then GREEN: focused connector-test/activity cases in `tools-admin.test.ts`
+- [x] Credential redaction and admin-auth regression tests pass
 
 **Dependencies:** Tasks 5, 8, and 10
 
@@ -343,7 +343,7 @@ Canonical bounded tool loop
 - [x] Search/Fetch mapping and URL abuse tests pass without live credentials.
 - [x] Limiter/cache/retry behavior is deterministic and bounded.
 - [x] Connector health and audit contain no sensitive payloads.
-- [ ] `/tools` configures and tests the connector and reads bounded safe activity while runtime execution remains gated.
+- [x] `/tools` configures and tests the connector and reads bounded safe activity while runtime execution remains gated.
 
 ### Task 11: Request policy and eligible tool projection
 
