@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import type { Config } from '../lib/config.js';
 import { randomId } from '../lib/auth.js';
-import { decryptSecret, encryptSecret } from '../lib/crypto.js';
+import { decryptSecret, encryptSecret, isEncryptedSecret } from '../lib/crypto.js';
 import {
   apiKeyHint,
   generateClientApiKey,
@@ -39,7 +39,15 @@ import {
   ensureOAuthVaultSchema,
   OAuthVault,
 } from '../oauth/vault.js';
-import type { AgentPatch, ApiKeyPatch, ConfigStore, ProviderPatch } from './types.js';
+import type {
+  AgentPatch,
+  ApiKeyPatch,
+  ConfigStore,
+  ConnectorCredentialState,
+  ConnectorCredentialUpdate,
+  ProviderPatch,
+} from './types.js';
+import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   createHubModelSync,
   deleteHubModelSync,
@@ -151,6 +159,93 @@ export class SqliteConfigStore implements ConfigStore {
       throw new Error('ENCRYPTION_KEY is required for OAuth vault');
     }
     return new OAuthVault(this.db, this.encryptionKey);
+  }
+
+  private requireConnectorEncryptionKey(): string {
+    if (!this.encryptionKey) {
+      throw new Error('ENCRYPTION_KEY is required for connector credential vault');
+    }
+    return this.encryptionKey;
+  }
+
+  private connectorCredentialState(
+    connectorId: RegisteredConnectorId,
+    secret: string | null,
+    configuredAt: number | null,
+    updatedAt: number | null,
+  ): ConnectorCredentialState {
+    return {
+      connectorId,
+      credentialConfigured: secret != null,
+      credentialHint: secret ? `…${secret.slice(-4)}` : null,
+      configuredAt,
+      updatedAt,
+    };
+  }
+
+  async getConnectorCredentialSecret(connectorId: RegisteredConnectorId): Promise<string | null> {
+    const encryptionKey = this.requireConnectorEncryptionKey();
+    const record = this.vault.getConnectorCredential(connectorId);
+    if (!record) return null;
+    if (!isEncryptedSecret(record.encryptedSecret)) {
+      throw new Error('Connector credential is not encrypted');
+    }
+    return decryptSecret(record.encryptedSecret, encryptionKey);
+  }
+
+  async getConnectorCredentialState(
+    connectorId: RegisteredConnectorId,
+  ): Promise<ConnectorCredentialState> {
+    const secret = await this.getConnectorCredentialSecret(connectorId);
+    const record = this.vault.getConnectorCredential(connectorId);
+    return this.connectorCredentialState(
+      connectorId,
+      secret,
+      record?.configuredAt ?? null,
+      record?.updatedAt ?? null,
+    );
+  }
+
+  async updateConnectorCredential(
+    connectorId: RegisteredConnectorId,
+    update: ConnectorCredentialUpdate,
+  ): Promise<ConnectorCredentialState> {
+    if (update.secret === null) {
+      this.vault.deleteConnectorCredential(connectorId);
+      return this.connectorCredentialState(connectorId, null, null, null);
+    }
+
+    const encryptionKey = this.requireConnectorEncryptionKey();
+    const existing = this.vault.getConnectorCredential(connectorId);
+    if (update.secret === undefined) {
+      if (existing && !isEncryptedSecret(existing.encryptedSecret)) {
+        throw new Error('Connector credential is not encrypted');
+      }
+      const secret = existing ? decryptSecret(existing.encryptedSecret, encryptionKey) : null;
+      return this.connectorCredentialState(
+        connectorId,
+        secret,
+        existing?.configuredAt ?? null,
+        existing?.updatedAt ?? null,
+      );
+    }
+
+    const secret = update.secret.trim();
+    if (!secret) throw new Error('Connector credential must not be empty');
+    const now = Date.now();
+    this.vault.upsertConnectorCredential({
+      connectorId,
+      encryptedSecret: encryptSecret(secret, encryptionKey),
+      encryptionVersion: 1,
+      configuredAt: existing?.configuredAt ?? now,
+      updatedAt: now,
+    });
+    return this.connectorCredentialState(
+      connectorId,
+      secret,
+      existing?.configuredAt ?? now,
+      now,
+    );
   }
 
   private migrate(): void {

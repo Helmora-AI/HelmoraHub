@@ -7,7 +7,7 @@
 ## Control plane
 
 - [x] Task 2: Immutable registry and versioned runtime configuration
-- [ ] Task 3: SQLite connector credential vault
+- [x] Task 3: SQLite connector credential vault
 - [ ] Task 4: Supabase and hybrid credential synchronization
 - [ ] Task 5: Authenticated Tools admin API
 - [ ] Checkpoint: Safe Control Plane

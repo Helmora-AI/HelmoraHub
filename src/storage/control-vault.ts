@@ -6,6 +6,8 @@ import {
   sortOutboxPending,
   type ControlOutboxOp,
 } from './control-plane.js';
+import type { ConnectorCredentialRecord } from './types.js';
+import type { RegisteredConnectorId } from '../tools/types.js';
 
 export function ensureControlVaultSchema(db: Database.Database): void {
   db.exec(`
@@ -41,6 +43,14 @@ export function ensureControlVaultSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS control_vault_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS control_vault_connector_credentials (
+      connector_id TEXT PRIMARY KEY,
+      encrypted_secret TEXT NOT NULL,
+      encryption_version INTEGER NOT NULL,
+      configured_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
 
@@ -201,6 +211,55 @@ export class ControlVault {
       .prepare('SELECT value FROM control_vault_settings WHERE key = ?')
       .get(key) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  upsertConnectorCredential(record: ConnectorCredentialRecord): void {
+    this.db.prepare(
+      `INSERT INTO control_vault_connector_credentials
+        (connector_id, encrypted_secret, encryption_version, configured_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(connector_id) DO UPDATE SET
+         encrypted_secret = excluded.encrypted_secret,
+         encryption_version = excluded.encryption_version,
+         configured_at = excluded.configured_at,
+         updated_at = excluded.updated_at`
+    ).run(
+      record.connectorId,
+      record.encryptedSecret,
+      record.encryptionVersion,
+      record.configuredAt,
+      record.updatedAt,
+    );
+  }
+
+  getConnectorCredential(connectorId: RegisteredConnectorId): ConnectorCredentialRecord | null {
+    const row = this.db.prepare(
+      `SELECT connector_id, encrypted_secret, encryption_version, configured_at, updated_at
+       FROM control_vault_connector_credentials WHERE connector_id = ?`
+    ).get(connectorId) as {
+      connector_id: RegisteredConnectorId;
+      encrypted_secret: string;
+      encryption_version: number;
+      configured_at: number;
+      updated_at: number;
+    } | undefined;
+    if (!row) return null;
+    if (row.encryption_version !== 1) {
+      throw new Error('Unsupported connector credential encryption version');
+    }
+    return {
+      connectorId: row.connector_id,
+      encryptedSecret: row.encrypted_secret,
+      encryptionVersion: 1,
+      configuredAt: row.configured_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  deleteConnectorCredential(connectorId: RegisteredConnectorId): boolean {
+    return this.db.prepare(
+      'DELETE FROM control_vault_connector_credentials WHERE connector_id = ?'
+    ).run(connectorId).changes > 0;
   }
 
   enqueueOutbox(op: ControlOutboxOp): void {

@@ -16,6 +16,28 @@ import type {
   UpdateHubModelInput,
 } from '../models/types.js';
 import type { ChatStoreMethods } from './chat-types.js';
+import type { RegisteredConnectorId } from '../tools/types.js';
+
+export type ConnectorCredentialRecord = {
+  connectorId: RegisteredConnectorId;
+  encryptedSecret: string;
+  encryptionVersion: 1;
+  configuredAt: number;
+  updatedAt: number;
+};
+
+export type ConnectorCredentialState = {
+  connectorId: RegisteredConnectorId;
+  credentialConfigured: boolean;
+  credentialHint: string | null;
+  configuredAt: number | null;
+  updatedAt: number | null;
+};
+
+export type ConnectorCredentialUpdate = {
+  /** undefined retains the current credential; null explicitly clears it. */
+  secret?: string | null;
+};
 
 export type ProviderPatch = Partial<{
   enabled: boolean;
