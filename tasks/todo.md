@@ -14,7 +14,7 @@
 
 ## Admin UI and connectors
 
-- [ ] Task 6: `/tools` route, API types, and draft helpers
+- [x] Task 6: `/tools` route, API types, and draft helpers
 - [ ] Task 7: `/tools` configuration page and activity shell
 - [ ] Task 8: TinyFish Search connector
 - [ ] Task 9: TinyFish Fetch target validation
