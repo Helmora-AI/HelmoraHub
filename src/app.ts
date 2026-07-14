@@ -15,6 +15,7 @@ import { keysRouter, pricingRouter, usageRouter } from './routes/keys.js';
 import { chatRouter } from './routes/chat.js';
 import { officeRouter } from './routes/office.js';
 import { oauthRouter } from './routes/oauth.js';
+import { toolsRouter } from './routes/tools.js';
 import './oauth/handlers/index.js';
 import { DOCS_CATALOG } from './docs/catalog.js';
 
@@ -61,6 +62,7 @@ export function createApp(_config: Config) {
   app.use('/api/usage', requireAdmin, usageRouter);
   app.use('/api/settings', requireAdmin, settingsRouter);
   app.use('/api/office', requireAdmin, officeRouter);
+  app.use('/api/tools', requireAdmin, toolsRouter);
   app.use('/api', requireAdmin, adminRouter);
 
   const publicCandidates = [

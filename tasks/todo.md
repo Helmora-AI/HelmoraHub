@@ -9,8 +9,8 @@
 - [x] Task 2: Immutable registry and versioned runtime configuration
 - [x] Task 3: SQLite connector credential vault
 - [x] Task 4: Supabase and hybrid credential synchronization
-- [ ] Task 5: Authenticated Tools admin API
-- [ ] Checkpoint: Safe Control Plane
+- [x] Task 5: Authenticated Tools admin API
+- [x] Checkpoint: Safe Control Plane
 
 ## Admin UI and connectors
 

@@ -1,4 +1,7 @@
 import { REGISTERED_TOOLS } from '../tools/registry.js';
+import { getConfigStore } from '../storage/index.js';
+import type { StoredHubModel } from '../models/types.js';
+import type { ProviderToggle } from '../types.js';
 import type {
   ConnectorCredentialMetadata,
   RegisteredToolId,
@@ -20,6 +23,16 @@ const SERVER_OWNED_OVERRIDE_FIELDS = [
   'immutable',
 ] as const;
 const SECRET_FIELD_PATTERN = /(?:api.?key|credential|secret|token|authorization)/i;
+const SUPPORTED_TOOL_PLANNER_PROTOCOLS = new Set([
+  'openai',
+  'keyless',
+  'custom',
+  'anthropic',
+  'gemini',
+  'oauth',
+]);
+
+export const TOOL_RUNTIME_SETTING_KEY = 'tool_runtime_v1';
 
 const DEFAULT_SCOPES: Record<ToolSurface, boolean> = {
   mini: true,
@@ -289,4 +302,60 @@ export function maskConnectorCredential(secret: string | null): ConnectorCredent
     credentialConfigured: true,
     credentialHint: `…${secret.slice(-4)}`,
   };
+}
+
+export async function getToolRuntimeConfig(): Promise<ToolRuntimeConfig> {
+  const raw = await getConfigStore().getSetting(TOOL_RUNTIME_SETTING_KEY);
+  if (!raw) return normalizeToolRuntimeConfig(null);
+  try {
+    return normalizeToolRuntimeConfig(JSON.parse(raw));
+  } catch {
+    return normalizeToolRuntimeConfig(null);
+  }
+}
+
+export async function setToolRuntimeConfig(config: ToolRuntimeConfig): Promise<void> {
+  await getConfigStore().setSetting(TOOL_RUNTIME_SETTING_KEY, JSON.stringify(config));
+}
+
+export function validateToolOrchestratorReferences(
+  config: ToolRuntimeConfig,
+  catalog: readonly StoredHubModel[],
+  providers: readonly ProviderToggle[],
+): ToolConfigValidationError[] {
+  const errors: ToolConfigValidationError[] = [];
+  const catalogById = new Map(catalog.map((model) => [model.id, model]));
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+
+  for (const slot of ['primaryCatalogId', 'fallbackCatalogId'] as const) {
+    const catalogId = config.orchestrator[slot];
+    if (!catalogId) continue;
+    const path = `orchestrator.${slot}`;
+    const model = catalogById.get(catalogId);
+    if (!model) {
+      errors.push({
+        path,
+        code: 'catalog_model_not_found',
+        message: `Catalog model ${catalogId} does not exist.`,
+      });
+      continue;
+    }
+    const provider = providersById.get(model.providerId);
+    if (!provider) {
+      errors.push({
+        path,
+        code: 'provider_not_found',
+        message: `Provider ${model.providerId} does not exist.`,
+      });
+      continue;
+    }
+    if (!SUPPORTED_TOOL_PLANNER_PROTOCOLS.has(provider.protocol)) {
+      errors.push({
+        path,
+        code: 'unsupported_protocol',
+        message: `Provider protocol ${provider.protocol} cannot plan tool calls.`,
+      });
+    }
+  }
+  return errors;
 }
