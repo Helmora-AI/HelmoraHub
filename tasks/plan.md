@@ -1,336 +1,599 @@
-# Implementation Plan: Helmora Mini 1.0 Role Router
+# Implementation Plan: Helmora Tools Runtime and Playground
 
 ## Overview
 
-Implement the approved role-based Helmora Mini 1.0 design across HelmoraHub and Helmora-Frontend. The work proceeds from deterministic classification and versioned configuration through exact catalog routing, observability, catalog protection, and finally the role-card Admin SPA. Every behavioral slice begins with a failing Hub test and leaves existing non-Mini routes working.
+Implement the approved Tools design as rollback-friendly vertical slices across HelmoraHub and Helmora-Frontend. The rollout starts with safe Playground Markdown, then establishes immutable tool/configuration contracts and encrypted connector credentials, ships a disabled-by-default `/tools` control plane, proves TinyFish Search and Fetch in isolation, and only then integrates bounded tool loops into model routing. Every backend behavior begins with a failing test, and incomplete runtime functionality remains disabled by default.
 
 ## Architecture Decisions
 
-- Store stable catalog IDs in six fixed role assignments; resolve provider/model identity at runtime.
-- Inherit missing specialist slots independently from `general`, deduplicate, and cap the attempt list at two.
-- Classify only user-authored conversation content; never classify system, identity, compression, or provider context.
-- Normalize retry behavior into an explicit cross-model retry decision before Mini advances slots.
-- Keep `helmora-mini-1.0` canonical and `auto` as a compatibility alias.
-- Preserve Helmora Mini public identity while operational details remain in headers, usage, logs, and authenticated admin data.
-- Remove Office only from the Admin SPA information architecture; do not delete the external Office project or endpoint.
-- Follow `Helmora-Frontend/DESIGN.md` and the approved role-card layout.
+- Keep built-in connector and tool identity, schemas, and risk in server-owned immutable code; persist only enablement, scopes, limits, caches, and orchestrator catalog IDs.
+- Keep TinyFish credentials out of `tool_runtime_v1`; store encrypted connector credentials through explicit SQLite, Supabase, and hybrid control-vault/outbox methods.
+- Treat TinyFish, model plans, fetched content, and model tool calls as untrusted input at every boundary.
+- Resolve answer routing before projecting eligible tools; tools never switch the selected answer model or append an implicit provider chain.
+- Default Tools to disabled after upgrade. Playground and Mini use `auto` only after enablement; explicit catalog/mode/direct routes remain `off` unless requested.
+- Use process-local bounded limiter/cache for the current single-instance deployment and document that it is not account-wide across replicas.
+- Meter every planner and answer model round separately with root-request lineage and no aggregate duplicate cost row.
+- Keep public OpenAI streaming compatible: only SSE comments during internal work, followed by ordinary chunks and `[DONE]`.
+- Defer write connectors, approval/resume, generic executable connectors, DuckDuckGo, schedules, and webhooks.
 
 ## Dependency Graph
 
 ```text
-Classifier + role types
-        │
-        ├── Version 2 config + migration + effective slots
-        │       ├── Admin GET/PUT contract
-        │       └── Catalog delete guard
-        │
-        └── Runtime catalog attempts + retry taxonomy
-                ├── /v1 and admin-chat integration
-                ├── streaming commit semantics
-                └── headers + usage metadata + identity coordination
-                                │
-                                └── Frontend API types + role-card UI
+Safe Playground Markdown (independent)
+
+Registry + config contracts
+        ├── connector credential vault
+        │       └── admin Tools API + /tools UI
+        ├── TinyFish Search connector
+        ├── TinyFish Fetch + SSRF defense
+        └── limiter/cache/retry + audit
+                    │
+Request policy + eligible projection
+                    │
+Canonical bounded tool loop
+        ├── native provider translation
+        └── catalog orchestrator fallback
+                    │
+/v1 + admin chat integration
+        ├── activity UI
+        ├── public SSE/CORS diagnostics
+        └── usage lineage
 ```
 
 ## Task Details
 
-### Task 1: Deterministic bilingual intent classifier
+### Task 1: Safe assistant Markdown in Playground
 
-**Description:** Add fixed Mini role types and a pure classifier for English, accented Vietnamese, unaccented Vietnamese, thresholds, tie precedence, and continuation turns.
-
-The classifier contract is explicit and stateless-safe:
-
-```ts
-type MiniClassifierInput = {
-  latestUserText: string;
-  previousUserText?: string;
-  previousMiniRole?: MiniRole;
-};
-```
-
-Selection policy:
-
-1. If the latest message crosses a specialist threshold, use that new role.
-2. If the latest message is a continuation with no specialist signal, retain a trusted `previousMiniRole` when provided.
-3. Otherwise classify `previousUserText` at reduced weight.
-4. Fall back to `general`.
-
-Assistant and system content are never inputs to this contract.
+**Description:** Render assistant messages with `react-markdown` and `remark-gfm` while user messages remain plain text. Add explicit component and URL policies, suppress images/raw HTML, bound rendered input, and style Markdown with existing tokens.
 
 **Acceptance criteria:**
-- [ ] Only user-authored messages influence classification.
-- [ ] All six outcomes, threshold behavior, ties, and continuation behavior are deterministic.
-- [ ] Continuation precedence is latest specialist → previous Mini role → previous user intent → General.
-- [ ] Assistant/system/identity text cannot enter the classifier or change the selected role.
+- [ ] Bold, emphasis, lists, tables, links, inline code, and fenced code render correctly without raw markers.
+- [ ] Raw HTML and images do not execute/render; unsafe protocols are not link targets.
+- [ ] Streaming updates preserve the existing message/bubble identity and remain readable.
 
 **Verification:**
-- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/mini-classifier.test.ts`
+- [ ] `npm.cmd run lint`
+- [ ] `npm.cmd run build`
+- [ ] Browser smoke: final/incomplete Markdown, unsafe HTML/link/image, code overflow, light/dark/mobile
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `Helmora-Frontend/package.json`
+- `Helmora-Frontend/package-lock.json`
+- `Helmora-Frontend/src/features/chat/AssistantMarkdown.tsx`
+- `Helmora-Frontend/src/features/chat/ChatPage.tsx`
+- `Helmora-Frontend/src/features/chat/ChatPage.css`
+
+**Estimated scope:** M
+
+### Task 2: Immutable registry and versioned runtime configuration
+
+**Description:** Add canonical tool contracts, the immutable TinyFish Search/Fetch registry, safe defaults, configuration normalization, validation, and masked DTO helpers. No connector execution or credential storage is added yet.
+
+**Acceptance criteria:**
+- [ ] Unknown tool/connector IDs and attempts to mutate risk/schema/connector identity are rejected.
+- [ ] Primary/fallback catalog IDs differ and configuration contains no credential material.
+- [ ] Defaults are disabled and normalized limits stay inside the approved Free profile.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-config.test.ts`
 - [ ] `npm.cmd run typecheck`
 
 **Dependencies:** None
 
 **Files likely touched:**
-- `src/services/mini-classifier.ts`
-- `src/__tests__/mini-classifier.test.ts`
-
-**Estimated scope:** S
-
-### Task 2: Version 2 role configuration and legacy migration
-
-**Description:** Replace candidate normalization with version 2 role assignments, read legacy candidates non-destructively, and compute slot-wise effective assignments with warnings.
-
-**Acceptance criteria:**
-- [ ] Version 2 config normalizes all fixed roles and preserves `enabled`.
-- [ ] Legacy candidates map to General primary/fallback when catalog rows exist.
-- [ ] Effective slots inherit independently, remove duplicates, and never exceed two attempts.
-
-**Verification:**
-- [ ] RED then GREEN: focused `mini-route.test.ts` normalization/migration tests
-- [ ] `npm.cmd run typecheck`
-
-**Dependencies:** Task 1
-
-**Files likely touched:**
-- `src/services/mini-route.ts`
-- `src/__tests__/mini-route.test.ts`
-- `src/storage/types.ts` only if a catalog lookup helper is required
+- `src/tools/types.ts`
+- `src/tools/registry.ts`
+- `src/services/tool-config.ts`
+- `src/__tests__/tool-config.test.ts`
 
 **Estimated scope:** M
 
-### Task 3: Admin Mini API version 2 contract
+### Task 3: SQLite connector credential vault
 
-**Description:** Update GET/PUT `/api/mini-route` to expose stored/effective role slots, catalog summaries, classifier metadata, migration warnings, and temporary-health warnings.
+**Description:** Introduce encrypted TinyFish credential records and explicit local-store CRUD. The public contract exposes configured/hint metadata only and fails closed when encryption is unavailable.
 
 **Acceptance criteria:**
-- [ ] GET returns the complete role configuration and field-addressable warnings.
-- [ ] PUT rejects structurally invalid/non-provider catalog references and duplicate same-role slots.
-- [ ] PUT accepts temporarily degraded static-eligible models and returns warnings.
+- [ ] Plaintext never enters settings or database columns; reads decrypt only inside the server credential boundary.
+- [ ] Set, rotate, retain-on-omission, and explicit clear semantics are deterministic.
+- [ ] DTOs, errors, and diagnostics never contain the secret.
 
 **Verification:**
-- [ ] RED then GREEN: focused Mini admin API tests
-- [ ] Existing `spa-routes.test.ts` remains green
+- [ ] RED then GREEN: focused `connector-vault.test.ts` SQLite cases
+- [ ] Existing `control-vault.test.ts` and `storage.test.ts` pass
 
 **Dependencies:** Task 2
 
 **Files likely touched:**
-- `src/routes/admin.ts`
-- `src/services/mini-route.ts`
-- `src/__tests__/mini-route.test.ts`
-- `src/__tests__/spa-routes.test.ts`
-
-**Estimated scope:** M
-
-## Checkpoint: Configuration Foundation
-
-- [ ] Classifier and config tests pass.
-- [ ] Admin GET/PUT response matches the spec.
-- [ ] `npm.cmd run typecheck` passes.
-- [ ] Commit the foundation as one reviewable backend increment.
-
-### Task 4: Protect referenced catalog models from deletion
-
-**Description:** Extend model catalog deletion guards to enumerate Mini role/slot references and reject deletion with `409 model_in_use`. The guard reads normalized effective Mini configuration, including role references projected from legacy candidates that have not yet been persisted as version 2.
-
-**Acceptance criteria:**
-- [ ] Every stored Mini role/slot reference is returned in the error.
-- [ ] Legacy candidate references are protected before the first version 2 save.
-- [ ] Deletion never auto-clears Mini configuration.
-- [ ] Unreferenced model deletion behavior remains unchanged.
-
-**Verification:**
-- [ ] RED then GREEN: focused `model-catalog.test.ts` delete-guard tests
-
-**Dependencies:** Task 2
-
-**Files likely touched:**
-- `src/routes/admin.ts`
-- `src/services/mini-route.ts`
-- `src/__tests__/model-catalog.test.ts`
-
-**Estimated scope:** M
-
-### Task 5: Exact catalog attempt resolution and retry taxonomy
-
-**Description:** Resolve the classified role into ordered catalog attempts and teach the routing layer to dispatch exact provider/model pairs with normalized retry decisions.
-
-The routing layer consumes this typed contract rather than inferring policy directly from status classes:
-
-```ts
-type CrossModelRetryDecision = {
-  retryable: boolean;
-  reason:
-    | 'network'
-    | 'rate_limited'
-    | 'upstream_unavailable'
-    | 'invalid_credentials'
-    | 'model_missing'
-    | 'request_invalid'
-    | 'context_limit'
-    | 'unsupported_request';
-  healthEffect: 'none' | 'degraded' | 'invalid_credentials';
-};
-```
-
-The initial context-limit policy is non-retryable because sending the same oversized conversation to another configured model is not guaranteed to cure the request. A later capability-aware policy may override this per adapter/model.
-
-**Acceptance criteria:**
-- [ ] Mini attempts contain slot, catalog ID, provider, and upstream model.
-- [ ] Retryable failures advance; deterministic request failures stop.
-- [ ] Network, 429, 5xx, provider 401/403, and model 404 retry; malformed 400, unsupported 422, and context-limit stop.
-- [ ] Provider 401/403 records `invalid_credentials` health effect before fallback.
-- [ ] The global mode/provider chain is never appended to Mini attempts.
-
-**Verification:**
-- [ ] RED then GREEN: focused Mini routing and retry tests
-- [ ] Existing tier-router/provider adapter tests remain green
-
-**Dependencies:** Tasks 1–3
-
-**Files likely touched:**
-- `src/services/mini-route.ts`
-- `src/services/tier-router.ts`
-- `src/providers/dispatch.ts`
-- `src/__tests__/mini-route.test.ts`
-- `src/__tests__/adapters-p2.test.ts`
-
-**Estimated scope:** M
-
-### Task 6: Integrate Mini role routing into non-stream and stream requests
-
-**Description:** Wire user-message classification and exact attempts into `/v1` and admin chat while preserving explicit catalog/mode routes. Define fallback only before the first visible streaming delta.
-
-**Acceptance criteria:**
-- [ ] `auto` and canonical Mini ID use identical role routing.
-- [ ] Non-stream and stream use primary then fallback under the normalized policy.
-- [ ] A stream never changes models after emitting visible content.
-
-**Verification:**
-- [ ] RED then GREEN: focused `sse.test.ts`, `admin-chat.test.ts`, and Mini integration tests
-- [ ] Explicit `catalog/*` and `mode/*` regression tests pass
-
-**Dependencies:** Task 5
-
-**Files likely touched:**
-- `src/routes/v1.ts`
-- `src/routes/chat.ts`
-- `src/services/tier-router.ts`
-- `src/__tests__/sse.test.ts`
-- `src/__tests__/admin-chat.test.ts`
-
-**Estimated scope:** M
-
-### Task 7: Identity and observability metadata
-
-**Description:** Preserve canonical Mini identity, expose role/slot headers and error metadata, and record Mini dimensions in usage storage.
-
-**Acceptance criteria:**
-- [ ] Identity is injected after classification and exactly once per attempt.
-- [ ] A fallback rebuilds a fresh upstream message envelope and replaces identity context; it never appends a second identity message to the prior attempt's envelope.
-- [ ] CORS exposes `X-Helmora-Mini-Role` and `X-Helmora-Mini-Slot`; route tests assert the actual `Access-Control-Expose-Headers` value.
-- [ ] Success headers are readable through CORS; failure bodies contain public-safe Mini metadata.
-- [ ] Usage stores nullable role, slot, and catalog ID across supported storage backends.
-
-**Verification:**
-- [ ] RED then GREEN: identity-context, usage, SQLite/Supabase schema, and API header tests
-- [ ] SQL schema assertions pass
-
-**Dependencies:** Task 6
-
-**Files likely touched:**
-- `src/services/identity-context.ts`
-- `src/routes/v1.ts`
-- `src/routes/chat.ts`
 - `src/storage/types.ts`
 - `src/storage/sqlite-store.ts`
-- Storage schema/migration files may form a separate atomic sub-commit if needed
+- `src/storage/control-vault.ts`
+- `src/__tests__/connector-vault.test.ts`
 
-**Estimated scope:** M, split storage migration if it exceeds five files
+**Estimated scope:** M
 
-## Checkpoint: Runtime Complete
+### Task 4: Supabase and hybrid credential synchronization
 
-- [ ] All focused Mini, chat, SSE, catalog, identity, and usage tests pass.
-- [ ] Full Hub test suite passes with isolated auth environment.
-- [ ] Hub typecheck and production build pass.
-- [ ] Commit runtime and storage changes in reviewable increments.
-
-### Task 8: Frontend API types and direct Agents route
-
-**Description:** Adopt the version 2 API contract in Helmora-Frontend and make `/agents` render Mini directly while removing Office from the Admin SPA route tree.
+**Description:** Extend Supabase and hybrid control-plane/outbox flows for connector credentials without placing secrets in generic settings or outbox diagnostics.
 
 **Acceptance criteria:**
-- [ ] Frontend types represent stored/effective role slots and warnings.
-- [ ] `/agents/mini` redirects to `/agents`; `/agents/office` is absent.
-- [ ] External Office codebase and Hub endpoint are untouched.
+- [ ] Supabase stores encrypted credential material and returns only masked metadata outside the vault.
+- [ ] Offline hybrid updates replay in order and converge without plaintext in outbox inspection.
+- [ ] Existing provider/API-key reconciliation behavior remains unchanged.
+
+**Verification:**
+- [ ] RED then GREEN: focused connector cases in hybrid online/degraded/reconcile tests
+- [ ] `npm.cmd test -- src/__tests__/supabase-schema.test.ts`
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Task 3
+
+**Files likely touched:**
+- `src/storage/supabase-store.ts`
+- `src/storage/hybrid-store.ts`
+- `src/storage/control-plane.ts`
+- `src/lib/supabase-schema.ts`
+- `src/__tests__/connector-vault.test.ts`
+
+**Estimated scope:** M
+
+### Task 5: Authenticated Tools admin API
+
+**Description:** Add authenticated GET/config PUT/credential PUT endpoints with atomic non-secret configuration writes, masked secret operations, catalog resolution, warnings, and field-addressable validation.
+
+**Acceptance criteria:**
+- [ ] GET returns registered tools, effective overrides, health/warnings, masked credential state, and orchestrator summaries.
+- [ ] Configuration PUT cannot mutate server-owned fields; credential PUT never echoes the secret.
+- [ ] All endpoints require an admin session and Tools remain disabled by default.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tools-admin.test.ts`
+- [ ] Existing `admin-auth.test.ts` and `spa-routes.test.ts` pass
+
+**Dependencies:** Tasks 2–4
+
+**Files likely touched:**
+- `src/routes/tools.ts`
+- `src/app.ts`
+- `src/services/tool-config.ts`
+- `src/__tests__/tools-admin.test.ts`
+
+**Estimated scope:** M
+
+## Checkpoint: Safe Control Plane
+
+- [ ] Playground Markdown is deployable independently.
+- [ ] Config contains no credentials and Tools default disabled.
+- [ ] SQLite, Supabase, and hybrid credential tests pass.
+- [ ] Admin API is authenticated and returns only masked secret metadata.
+- [ ] Hub typecheck/build and Frontend lint/build pass.
+
+### Task 6: `/tools` route, API types, and draft helpers
+
+**Description:** Add the direct `/tools` route under System, frontend API types/client methods, and pure helpers for draft normalization, validation, dirty comparison, effective scopes, and warnings.
+
+**Acceptance criteria:**
+- [ ] `/tools` is lazy-loaded under System and is included in Cloudflare SPA rewrites.
+- [ ] Secret retain/replace/clear is represented separately from the non-secret atomic draft.
+- [ ] Pure helpers own validation and derived state rather than component branches.
 
 **Verification:**
 - [ ] `npm.cmd run lint`
 - [ ] `npm.cmd run build`
 
-**Dependencies:** Task 3
+**Dependencies:** Task 5
 
 **Files likely touched:**
 - `src/types/api.ts`
 - `src/lib/api/hub.ts`
 - `src/app/router.tsx`
-- `src/features/agents/AgentsLayout.tsx`
+- `src/app/AppShell.tsx`
+- `src/features/tools/toolsDraft.ts`
 
 **Estimated scope:** M
 
-### Task 9: Role-card configuration UI
+### Task 7: `/tools` configuration page and activity shell
 
-**Description:** Rebuild the Mini page as six responsive role cards with searchable model selectors, effective routing, status/warning feedback, and draft save/discard behavior.
-
-Keep draft behavior outside the React component in pure helpers such as:
-
-```ts
-buildEffectiveRolePreview()
-validateMiniDraft()
-isMiniDraftDirty()
-buildRoleWarnings()
-```
-
-These helpers own duplicate primary/fallback validation, slot inheritance summaries, dirty comparison, same-provider warnings, and stale selection mapping. The component owns rendering, query/mutation state, and user events.
+**Description:** Build the DESIGN.md-aligned configuration page for runtime status, orchestrator selectors, TinyFish Free profile, masked credential management, immutable registry/scopes, Save/Discard behavior, and an explicit unavailable/empty activity shell. Live connector testing and activity data are wired only after Task 10B.
 
 **Acceptance criteria:**
-- [ ] Six cards follow `DESIGN.md`, dual themes, and `3 → 2 → 1` responsiveness.
-- [ ] Stored, inherited, degraded, and same-provider states are understandable without relying on color alone.
-- [ ] Draft validation, effective preview, dirty detection, and warnings live in pure helpers rather than component branches.
-- [ ] Dirty actions are sticky; save is atomic and disabled for unchanged/invalid drafts.
+- [ ] Loading, empty, configured, degraded, dirty, validation, save, and secret-rotation states are understandable in both themes.
+- [ ] Registry identity is visibly immutable while enabled/scopes/limits remain configurable.
+- [ ] Activity is clearly shown as unavailable/not yet loaded rather than backed by mock production data.
+- [ ] Status and warnings do not rely on color alone; controls are keyboard accessible and responsive.
 
 **Verification:**
-- [ ] `npm.cmd run lint` with no new warnings
+- [ ] `npm.cmd run lint`
 - [ ] `npm.cmd run build`
-- [ ] Browser verification: light/dark, desktop/tablet/mobile, loading/error/dirty/save/stale states
+- [ ] Browser smoke for desktop/mobile and light/dark states
 
-**Dependencies:** Tasks 3 and 8
+**Dependencies:** Task 6
 
 **Files likely touched:**
-- `src/features/agents/MiniRoutePage.tsx`
-- `src/features/agents/agentsShared.ts`
-- `src/features/agents/miniRouteDraft.ts`
+- `src/features/tools/ToolsPage.tsx`
+- `src/features/tools/ToolsPage.css`
+- `src/features/tools/toolsDraft.ts`
 - `src/app/AppShell.css`
-- `src/types/api.ts`
 
 **Estimated scope:** M
 
-### Task 10: Final compatibility and quality review
+### Task 8: TinyFish Search connector
 
-**Description:** Run the full verification matrix, review the combined diffs, and update documentation that still describes Office-first Agents or the legacy candidate chain.
+**Description:** Implement the allowlisted Search request projection, validation, abort/timeout behavior, response normalization, safe sources, and redacted errors behind an injected fetch boundary.
 
 **Acceptance criteria:**
-- [ ] All spec success criteria are demonstrated.
-- [ ] No unrelated code or generated output is included.
-- [ ] README/design route descriptions no longer contradict the shipped Agents surface.
+- [ ] Only the official Search endpoint and approved fields are emitted with `X-API-Key` server-side.
+- [ ] Conflicting freshness/date filters and oversized input fail before network I/O.
+- [ ] Responses normalize into bounded content/sources without leaking upstream bodies or credentials.
 
 **Verification:**
-- [ ] HelmoraHub: full tests, typecheck, build
-- [ ] Helmora-Frontend: lint, build, browser smoke
-- [ ] `git diff --check` in both repositories
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tinyfish-search.test.ts`
+- [ ] `npm.cmd run typecheck`
 
-**Dependencies:** Tasks 1–9
+**Dependencies:** Tasks 2–3
 
 **Files likely touched:**
-- Relevant README/docs only where behavior changed
+- `src/tools/connectors/tinyfish-client.ts`
+- `src/tools/connectors/tinyfish-search.ts`
+- `src/tools/validation.ts`
+- `src/__tests__/tinyfish-search.test.ts`
+
+**Estimated scope:** M
+
+### Task 9: TinyFish Fetch target validation
+
+**Description:** Implement 1–10 URL Fetch with canonical URL validation, DNS/IP policy, available redirect-metadata revalidation, query redaction, fragment stripping, and bounded Markdown/JSON normalization. TinyFish performs the actual network fetch, so Hub does not claim socket-level DNS pinning.
+
+**Acceptance criteria:**
+- [ ] Local/private/link-local/metadata targets, alternate IP forms, credentials, non-HTTPS, non-default ports, and unsafe punycode are rejected.
+- [ ] Hub resolves and inspects every current DNS record before sending the URL, rejecting when any address violates policy.
+- [ ] Redirect URLs reported by TinyFish are revalidated when metadata is available; TinyFish validation remains defense in depth rather than Helmora's sole boundary.
+- [ ] Activity never exposes sensitive query strings and signed URLs are marked non-cacheable.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tinyfish-fetch.test.ts`
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Task 8
+
+**Files likely touched:**
+- `src/tools/connectors/tinyfish-fetch.ts`
+- `src/tools/url-policy.ts`
+- `src/tools/connectors/tinyfish-client.ts`
+- `src/__tests__/tinyfish-fetch.test.ts`
+
+**Estimated scope:** M
+
+### Task 10: Bounded limiter, cache, retries, and tool audit
+
+**Description:** Add process-local Search-request and Fetch-URL quota accounting, bounded/versioned caches, retry budgets with `Retry-After`, connector health, and safe tool-run audit persistence.
+
+**Acceptance criteria:**
+- [ ] Cache hits reserve no quota; uncached Fetch batches reserve atomically or fail without partial execution.
+- [ ] Retryable statuses stay within attempt/wall-clock budgets; credential/throttle health is observable.
+- [ ] Audit rows omit arguments, content, raw URLs, headers, and secrets across SQLite/Supabase.
+
+**Verification:**
+- [ ] RED then GREEN: focused `tool-runtime.test.ts` limiter/cache/retry cases
+- [ ] RED then GREEN: focused SQLite/Supabase tool-audit tests
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Tasks 8–9
+
+**Files likely touched:**
+- `src/services/tool-executor.ts`
+- `src/services/tool-limits.ts`
+- `src/storage/types.ts`
+- `src/storage/sqlite-store.ts`
+- `src/__tests__/tool-runtime.test.ts`
+
+**Estimated scope:** M; Supabase audit persistence may be a separate atomic sub-increment.
+
+### Task 10A: Connector test, health, and activity API
+
+**Description:** Mount the remaining authenticated operational endpoints after the connector executor and audit store exist: one exact TinyFish connectivity test and bounded recent activity reads.
+
+**Acceptance criteria:**
+- [ ] `POST /api/tools/connectors/tinyfish/test` requires an admin session, bypasses result cache, and uses one fixed harmless Search query; it never invokes Fetch, Agent, or Browser.
+- [ ] The test still passes through timeout, limiter, retry budget, redaction, and audit policy, with audit source `admin_connector_test`.
+- [ ] Test responses expose only redacted health/result metadata and create one safe audit record without the credential or raw upstream body.
+- [ ] `GET /api/tools/activity` requires an admin session, validates bounded limit/cursor input, and returns allowlisted audit fields only.
+
+**Verification:**
+- [ ] RED then GREEN: focused connector-test/activity cases in `tools-admin.test.ts`
+- [ ] Credential redaction and admin-auth regression tests pass
+
+**Dependencies:** Tasks 5, 8, and 10
+
+**Files likely touched:**
+- `src/routes/tools.ts`
+- `src/services/tool-executor.ts`
+- `src/storage/types.ts`
+- `src/__tests__/tools-admin.test.ts`
+
+**Estimated scope:** M
+
+### Task 10B: Live connector health and activity UI
+
+**Description:** Replace the Task 7 activity shell with real connector-test state and recent safe activity data from Task 10A.
+
+**Acceptance criteria:**
+- [ ] Test action shows running/success/throttled/credentials-required/failure states without exposing raw upstream data.
+- [ ] Recent activity supports bounded loading and completed/throttled/failed filters.
+- [ ] Empty and degraded states remain accessible and do not rely on color alone.
+
+**Verification:**
+- [ ] `npm.cmd run lint`
+- [ ] `npm.cmd run build`
+- [ ] Browser smoke for test and recent-activity states
+
+**Dependencies:** Tasks 7 and 10A
+
+**Files likely touched:**
+- `src/lib/api/hub.ts`
+- `src/types/api.ts`
+- `src/features/tools/ToolsPage.tsx`
+- `src/features/tools/ToolsPage.css`
+
+**Estimated scope:** M
+
+## Checkpoint: TinyFish Execution Foundation
+
+- [ ] Search/Fetch mapping and URL abuse tests pass without live credentials.
+- [ ] Limiter/cache/retry behavior is deterministic and bounded.
+- [ ] Connector health and audit contain no sensitive payloads.
+- [ ] `/tools` configures and tests the connector and reads bounded safe activity while runtime execution remains gated.
+
+### Task 11: Request policy and eligible tool projection
+
+**Description:** Implement the exact `X-Helmora-Tools: off|auto|force` wire contract, surface defaults, deterministic bilingual relevance gating, scope projection, CORS preflight support, and explicit rejection of client-supplied OpenAI tools/tool messages.
+
+**Acceptance criteria:**
+- [ ] Ordinary `auto` turns skip planning; freshness/research/search/URL intent reaches planning without granting execution authority.
+- [ ] Mini/Playground and explicit-route defaults match the spec; `off` always wins.
+- [ ] The administrative kill switch is evaluated first: disabled runtime always resolves `off`, including when the header is `force`.
+- [ ] Remaining order is valid request override or surface default → tool scope/eligibility → `auto` relevance gate → schema/policy authorization; any other header value returns HTTP 400 `invalid_tools_policy`.
+- [ ] `force` bypasses only relevance and cannot enable the runtime, broaden scope, or bypass policy.
+- [ ] Approved browser origins can send `X-Helmora-Tools`, and route tests assert the preflight allow-header response.
+- [ ] Client-defined tools are rejected as `client_tools_unsupported` rather than forwarded or ignored.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-policy.test.ts`
+- [ ] Existing Mini classifier/router tests pass
+
+**Dependencies:** Tasks 2 and 5
+
+**Files likely touched:**
+- `src/services/tool-policy.ts`
+- `src/tools/types.ts`
+- `src/__tests__/tool-policy.test.ts`
+
+**Estimated scope:** S
+
+### Task 12: Canonical bounded tool loop
+
+**Description:** Build the provider-neutral loop state machine for validated calls, deduplication, read-only reauthorization, execution, untrusted result envelopes, truncation, exact budgets, and root cancellation.
+
+**Acceptance criteria:**
+- [ ] Every proposed call is schema-validated and policy-checked immediately before execution.
+- [ ] Exact boundaries are enforced and tested: 4 rounds, 4 calls/round, 8 calls total, 30,000 ms total, 10,000 ms/connector request, 64 KiB/result, and 128 KiB total tool context or the smaller model budget.
+- [ ] One root `AbortSignal` propagates through planning, connector work, retries, native rounds, and answer generation; abort stops new work without unhandled rejection or late activity.
+- [ ] Tool results cannot mutate identity, routing, scopes, registry, credentials, or policy.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-loop.test.ts`
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Tasks 10–11
+
+**Files likely touched:**
+- `src/services/tool-runtime.ts`
+- `src/services/tool-loop.ts`
+- `src/tools/untrusted-context.ts`
+- `src/__tests__/tool-loop.test.ts`
+
+**Estimated scope:** M
+
+### Task 13A: OpenAI Chat and Codex Responses tool translation
+
+**Description:** Extend OpenAI Chat Completions/OpenAI-compatible and the separate Codex Responses adapter to translate registered tools/calls/results while preserving call IDs and keeping protocol shapes inside adapters.
+
+**Acceptance criteria:**
+- [ ] OpenAI Chat and OpenAI Responses capability is explicit adapter/catalog metadata, never inferred from a model name.
+- [ ] Both protocols round-trip canonical calls/results and reject malformed arguments with protocol-specific fixtures.
+- [ ] Codex Responses never receives a Chat Completions tool schema; if a Responses feature cannot be supported, its adapter reports `nativeToolCalling=false` and uses the orchestrator path explicitly.
+- [ ] Existing non-tool request and streaming adapter behavior remains unchanged.
+
+**Verification:**
+- [ ] RED then GREEN: focused OpenAI/Codex cases in `adapters-p2.test.ts`
+- [ ] Existing provider adapter and vision tests pass
+
+**Dependencies:** Task 12
+
+**Files likely touched:**
+- `src/services/upstream.ts`
+- `src/providers/adapters/codex-responses.ts`
+- `src/providers/dispatch.ts`
+- `src/__tests__/adapters-p2.test.ts`
+
+**Estimated scope:** M
+
+### Task 13B: Anthropic Messages and Gemini tool translation
+
+**Description:** Translate the same canonical registry/call/result contract for Anthropic Messages and Gemini GenerateContent without leaking either native protocol into routes.
+
+**Acceptance criteria:**
+- [ ] Anthropic and Gemini native capability is explicit adapter/catalog metadata.
+- [ ] Both adapters preserve canonical call IDs, validate arguments, and serialize normalized tool results correctly.
+- [ ] Existing non-tool and streaming behavior remains unchanged.
+
+**Verification:**
+- [ ] RED then GREEN: focused Anthropic/Gemini cases in `adapters-p2.test.ts`
+- [ ] Existing provider adapter and vision tests pass
+
+**Dependencies:** Task 12
+
+**Files likely touched:**
+- `src/providers/adapters/anthropic.ts`
+- `src/providers/adapters/gemini.ts`
+- `src/providers/dispatch.ts`
+- `src/__tests__/adapters-p2.test.ts`
+
+**Estimated scope:** M
+
+### Task 14: Catalog Tool Orchestrator primary/fallback
+
+**Description:** Add strict planner prompting/parsing for non-native answer models, exact catalog primary/fallback resolution, normalized retry behavior, and untrusted result delivery back to the original answer model.
+
+**Acceptance criteria:**
+- [ ] Planner emits no call or schema-valid registered read-only calls only; it never authors the final answer.
+- [ ] Only configured primary then fallback are attempted and each round emits complete metering lineage for Task 15 to persist.
+- [ ] Planner failure never silently claims current information or changes the answer model.
+
+**Verification:**
+- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-orchestrator.test.ts`
+- [ ] Existing catalog/Mini retry tests pass
+
+**Dependencies:** Tasks 5, 11–12
+
+**Files likely touched:**
+- `src/services/tool-orchestrator.ts`
+- `src/services/tool-config.ts`
+- `src/services/tier-router.ts`
+- `src/__tests__/tool-orchestrator.test.ts`
+
+**Estimated scope:** M
+
+### Task 15: Usage lineage and cost attribution
+
+**Description:** Add nullable tool lineage to usage contracts and both storage backends before any multi-round route integration; meter every planner/answer round to the originating request/API-key budget without double counting.
+
+**Acceptance criteria:**
+- [ ] Each provider call has a unique usage request ID and root `parentRequestId`/tool run/round lineage.
+- [ ] Usage rows include nullable `usagePhase: 'tool_planner' | 'tool_answer_round'` and `toolRound`, so reporting never infers phase from nullable IDs or source strings.
+- [ ] API-key budgets include all model rounds exactly once; Admin Playground remains admin-chat usage.
+- [ ] SQLite/Supabase schema compatibility and existing reporting remain intact.
+
+**Verification:**
+- [ ] RED then GREEN: focused usage, pricing, SQLite, and Supabase schema tests
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Task 14
+
+**Files likely touched:**
+- `src/keys/types.ts`
+- `src/storage/sqlite-store.ts`
+- `src/storage/supabase-store.ts`
+- `src/lib/supabase-schema.ts`
+- `src/__tests__/supabase-schema.test.ts`
+
+**Estimated scope:** M
+
+### Task 16: Runtime integration, cancellation, SSE activity, and CORS diagnostics
+
+**Description:** Integrate native/orchestrated loops after route resolution in `/v1` and admin chat only after usage lineage exists. Add one root cancellation chain, public keepalive comments/headers, and ordered redacted admin `tool_activity` events without exposing native protocol frames.
+
+**Acceptance criteria:**
+- [ ] Mini, catalog, mode, and direct answer routing remains unchanged while eligible tools work on every approved surface.
+- [ ] Client disconnect/Stop aborts planner, connector, retries, native rounds, and final answer; terminal audit/usage persists once with no late activity or unhandled rejection.
+- [ ] Public SSE order is comments → normal OpenAI chunks → `[DONE]`; admin order is metadata → activities → chunks → `[DONE]`.
+- [ ] CORS exposes safe tool diagnostics; no secret, raw arguments, or provider tool frame reaches clients.
+
+**Verification:**
+- [ ] RED then GREEN: focused `sse.test.ts`, `admin-chat.test.ts`, cancellation, and tool integration cases
+- [ ] Explicit non-tool route regression tests pass
+
+**Dependencies:** Tasks 13A, 13B, 14, and 15
+
+**Files likely touched:**
+- `src/routes/v1.ts`
+- `src/routes/chat.ts`
+- `src/lib/runtime-config.ts`
+- `src/__tests__/sse.test.ts`
+- `src/__tests__/admin-chat.test.ts`
+
+**Estimated scope:** M
+
+### Task 17: Backward-compatible chat activity persistence
+
+**Description:** Version the Hub-backed Playground chat contract additively so redacted tool activities persist with the assistant message/turn they support. The current active store is SQLite/Supabase; legacy localStorage exists only as an import path.
+
+**Acceptance criteria:**
+- [ ] `StoredChatMessage` gains bounded `toolActivities?: ChatToolActivity[]` with allowlisted display fields only.
+- [ ] SQLite and Supabase add backward-compatible storage; old rows normalize missing activity to `[]` and existing history is never reset.
+- [ ] Restoring a persisted `running` activity without a live owning generation converts it to `failed` with `errorCode: 'run_interrupted'`.
+- [ ] Legacy browser-history import remains readable and missing activity fields migrate non-destructively.
+
+**Verification:**
+- [ ] RED then GREEN: focused `chat-history.test.ts`, SQLite migration, and Supabase schema cases
+- [ ] `npm.cmd run typecheck`
+
+**Dependencies:** Task 16
+
+**Files likely touched:**
+- `src/storage/chat-types.ts`
+- `src/storage/chat-sqlite.ts`
+- `src/storage/chat-supabase.ts`
+- `src/lib/supabase-schema.ts`
+- `src/__tests__/chat-history.test.ts`
+
+**Estimated scope:** M
+
+### Task 18: Playground tool activity presentation
+
+**Description:** Parse the redacted activity stream, associate it with the pending assistant turn, persist it through Task 17, and render lightweight accessible Search/Fetch rows immediately before the supported assistant response.
+
+**Acceptance criteria:**
+- [ ] Activity ordering and message association survive streaming, Stop, reload, and Hub-backed session restoration.
+- [ ] Interrupted restored activity renders as a terminal failure and never remains on “Searching web…” indefinitely.
+- [ ] Rows expose only allowlisted query/redacted URL/source count/duration/error fields; running rows expand, completed rows collapse, and failures remain visible.
+- [ ] Collapse controls are keyboard-accessible and work in both themes and reduced motion.
+
+**Verification:**
+- [ ] `npm.cmd run lint`
+- [ ] `npm.cmd run build`
+- [ ] Browser smoke for running/completed/failed Search and Fetch activities plus reload/session restore
+
+**Dependencies:** Tasks 1, 16, and 17
+
+**Files likely touched:**
+- `src/lib/chatSse.ts`
+- `src/lib/chatRuntime.ts`
+- `src/features/chat/ToolActivity.tsx`
+- `src/features/chat/ChatPage.tsx`
+- `src/features/chat/ChatPage.css`
+
+**Estimated scope:** M
+
+## Checkpoint: Runtime Complete
+
+- [ ] Native and orchestrated Search/Fetch loops work under exact selected answer routing.
+- [ ] Public and Admin streaming contracts are proven and CORS headers exposed.
+- [ ] Every provider round is metered once with root lineage.
+- [ ] Tool activity survives Hub-backed chat persistence and renders accessibly in Playground.
+- [ ] Full Hub tests/typecheck/build and Frontend lint/build pass.
+- [ ] Security review confirms target-validation, prompt-injection, secret, quota, cancellation, and unbounded-consumption controls.
+
+### Task 19: Final compatibility, browser, and documentation review
+
+**Description:** Run the complete matrix, review combined diffs for scope/secrets, test production-like browser states, and update documentation that contradicts the shipped `/tools` and Playground behavior.
+
+**Acceptance criteria:**
+- [ ] All spec success criteria are demonstrated with Tools disabled and enabled.
+- [ ] No Agent/Browser, write connector, generic executable connector, DuckDuckGo, scheduler, or webhook implementation slipped into the MVP.
+- [ ] Existing Mini and non-tool routes retain compatible behavior and public model identity.
+
+**Verification:**
+- [ ] HelmoraHub: `npm.cmd test`, `npm.cmd run typecheck`, `npm.cmd run build`
+- [ ] Helmora-Frontend: `npm.cmd run lint`, `npm.cmd run build`
+- [ ] Both repositories: `git diff --check`
+- [ ] Browser: `/tools`, Markdown, activity, themes, responsive layout, reload/back/forward, network/CORS/SSE
+- [ ] Dependency/security review including `npm audit` triage and secret scan
+
+**Dependencies:** Tasks 1–18
+
+**Files likely touched:** Relevant README/docs only where behavior changed.
 
 **Estimated scope:** S
 
@@ -338,14 +601,16 @@ These helpers own duplicate primary/fallback validation, slot inheritance summar
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Existing router assumes one model pin per provider | High | Introduce explicit catalog attempts rather than overloading `modelByProvider` |
-| Streaming adapters expose success before a visible delta | High | Add a focused first-visible-chunk contract and tests before route integration |
-| Usage schema touches multiple storage backends | High | Split storage migration into its own verified subtask/commit |
-| Legacy candidate mapping cannot find catalog IDs | Medium | Non-destructive read migration plus explicit admin warnings |
-| Temporary provider health makes UI appear stale | Medium | Separate static eligibility from runtime status and preserve selected items |
-| `auto` behavior surprises legacy clients | Medium | Canonical compatibility tests and rollout documentation |
-| Frontend has no test runner | Medium | Keep UI state logic small; require lint/build plus real-browser state verification |
+| Connector secret leaks through generic settings/outbox | Critical | Dedicated encrypted methods, masked DTOs, negative tests, no payload logging |
+| Unsafe Fetch target reaches internal/sensitive services | Critical | HTTPS/host/IP policy, inspect all current DNS records, validate available redirect metadata, and state TinyFish boundary honestly |
+| Provider adapters have incompatible tool protocols | High | Canonical contract and adapter-focused fixtures before route integration |
+| Tool loops amplify latency and cost | High | Relevance gate, disabled defaults, hard round/call/time/context bounds, usage lineage |
+| Streaming proxies time out during internal rounds | High | Standards-valid SSE keepalive comments with integration tests |
+| Hybrid credential changes diverge offline | High | Explicit control-plane entity/outbox tests and ordered convergence |
+| Process-local quota exceeds account limit across replicas | Medium | State single-instance limitation; require Redis before multi-replica claims |
+| Markdown introduces XSS/tracking/layout abuse | High | No raw HTML/images, safe URL transform, bounded content, React escaping |
+| Frontend lacks broad unit test runner | Medium | Keep pure helpers separate; require build/lint plus browser verification |
 
 ## Open Questions
 
-None. Deferred follow-ups are optimistic config revisions/CAS and a Test Classification UI.
+None. Deferred work remains write approval/resume, generic connectors, DuckDuckGo production search, MCP, Redis coordination, and proactive automation.

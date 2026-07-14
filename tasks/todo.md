@@ -1,27 +1,41 @@
-# Helmora Mini 1.0 Role Router — Task Checklist
+# Helmora Tools Runtime Checklist
 
-## Foundation
+## Safe presentation
 
-- [x] Task 1: Add deterministic bilingual classifier with explicit continuation inputs and tests.
-- [x] Task 2: Add version 2 role config, legacy migration, and slot-wise inheritance.
-- [x] Task 3: Update Admin Mini GET/PUT contract and validation.
-- [x] Checkpoint: focused tests and Hub typecheck pass.
+- [ ] Task 1: Safe assistant Markdown in Playground
+
+## Control plane
+
+- [ ] Task 2: Immutable registry and versioned runtime configuration
+- [ ] Task 3: SQLite connector credential vault
+- [ ] Task 4: Supabase and hybrid credential synchronization
+- [ ] Task 5: Authenticated Tools admin API
+- [ ] Checkpoint: Safe Control Plane
+
+## Admin UI and connectors
+
+- [ ] Task 6: `/tools` route, API types, and draft helpers
+- [ ] Task 7: `/tools` configuration page and activity shell
+- [ ] Task 8: TinyFish Search connector
+- [ ] Task 9: TinyFish Fetch target validation
+- [ ] Task 10: Bounded limiter, cache, retries, and tool audit
+- [ ] Task 10A: Connector test, health, and activity API
+- [ ] Task 10B: Live connector health and activity UI
+- [ ] Checkpoint: TinyFish Execution Foundation
 
 ## Runtime
 
-- [x] Task 4: Add version 2 and projected legacy references to model catalog delete guard.
-- [x] Task 5: Add exact catalog attempts and typed cross-model retry decisions.
-- [x] Task 6: Integrate role routing into non-stream and stream requests.
-- [x] Task 7: Add rebuilt-per-attempt identity, exposed headers, error, and usage observability.
-- [x] Checkpoint: full Hub tests, typecheck, and build pass.
+- [ ] Task 11: Request policy and eligible tool projection
+- [ ] Task 12: Canonical bounded tool loop
+- [ ] Task 13A: OpenAI Chat and Codex Responses tool translation
+- [ ] Task 13B: Anthropic Messages and Gemini tool translation
+- [ ] Task 14: Catalog Tool Orchestrator primary/fallback
+- [ ] Task 15: Usage lineage and cost attribution
+- [ ] Task 16: Runtime integration, cancellation, SSE activity, and CORS diagnostics
+- [ ] Task 17: Backward-compatible chat activity persistence
+- [ ] Task 18: Playground tool activity presentation
+- [ ] Checkpoint: Runtime Complete
 
-## Admin SPA
+## Final review
 
-- [x] Task 8: Update frontend API types and make `/agents` Mini-only.
-- [x] Task 9: Build the approved six-card UI with pure draft helpers.
-
-## Completion
-
-- [x] Task 10: Run full compatibility and quality review.
-- [x] Confirm both repository diffs contain no unrelated or generated files.
-- [x] Confirm all approved spec success criteria.
+- [ ] Task 19: Final compatibility, browser, and documentation review

@@ -1,7 +1,7 @@
 # Helmora Tools Runtime and Playground Design
 
 **Date:** 2026-07-15
-**Status:** Revised after design review, pending implementation planning
+**Status:** Approved for implementation
 **Surfaces:** HelmoraHub runtime/admin API and Helmora-Frontend `/tools` and Playground
 
 ## Objective
@@ -213,7 +213,7 @@ type WebFetchInput = {
 
 The connector permits 1–10 HTTPS URLs. HTML output is deliberately excluded from the model-facing preset. Hub validation rejects URL credentials, localhost, loopback, link-local, private-network literals, and disallowed schemes before contacting TinyFish. Redirect and content safety remain defense-in-depth responsibilities even though TinyFish also validates targets.
 
-URL validation canonicalizes and tests IPv4 decimal/octal/hex forms, IPv6 loopback and IPv4-mapped IPv6, trailing-dot localhost, metadata/link-local hosts, non-default ports, punycode, and DNS results. Every redirect target is revalidated; public-to-private redirects and DNS rebinding are rejected. Activity uses a redacted display URL rather than the raw sensitive query string.
+URL validation canonicalizes and tests IPv4 decimal/octal/hex forms, IPv6 loopback and IPv4-mapped IPv6, trailing-dot localhost, metadata/link-local hosts, non-default ports, punycode, and every currently resolved DNS record before sending a URL to TinyFish. Hub rejects the URL when any resolved address violates policy and revalidates redirect URLs reported by TinyFish when such metadata is available. Because TinyFish performs the network fetch, Hub does not claim connection-level DNS pinning or complete DNS-rebinding prevention unless TinyFish exposes an explicit pinning contract. TinyFish target validation is additional defense, not Helmora's sole authorization boundary. Activity uses a redacted display URL rather than the raw sensitive query string.
 
 TinyFish Search and Fetch share one `X-API-Key`, but no other TinyFish endpoint is present in the connector allowlist.
 
@@ -236,12 +236,19 @@ The initial limiter and cache are bounded and process-local, matching the curren
 - `429` records throttled health and the most recent occurrence.
 - A tool failure is returned to the model as a structured error. The model may explain the failure but must not fabricate fresh information.
 
-Concrete default budgets, all covered by tests:
+Concrete default constants, all covered at their exact boundaries by tests:
 
-- Total Tool Runtime wall clock: 30 seconds.
-- One connector request: 10 seconds.
-- One normalized tool result: 64 KiB.
-- Total tool context inserted into model rounds: 128 KiB or the smaller model-context budget.
+```ts
+const MAX_TOOL_ROUNDS = 4;
+const MAX_CALLS_PER_ROUND = 4;
+const MAX_TOTAL_CALLS = 8;
+const MAX_TOOL_WALL_CLOCK_MS = 30_000;
+const MAX_CONNECTOR_REQUEST_MS = 10_000;
+const MAX_RESULT_BYTES_PER_CALL = 64 * 1024;
+const MAX_TOTAL_TOOL_CONTEXT_BYTES = 128 * 1024;
+```
+
+The model-context contribution uses the smaller of `MAX_TOTAL_TOOL_CONTEXT_BYTES` and the selected model's remaining context budget.
 - Registry schema: no remote `$ref`; bounded serialized size/depth and an allowlist of supported JSON Schema keywords.
 
 ## Model Tool-Calling Paths
@@ -276,7 +283,31 @@ The effective request policy is `off`, `auto`, or `force`:
 | Public Mini aliases (`auto`, `helmora-mini-1.0`) | `auto` when runtime is enabled |
 | Explicit `catalog/*`, `mode/*`, or directly selected `/v1` model | `off` |
 
-Clients may set `X-Helmora-Tools: off|auto|force`. `off` always suppresses Helmora-managed tool planning. `auto` uses a deterministic relevance prefilter for explicit freshness/current-information, research/source, search, or URL-reading intent. `force` always reaches the model/planner tool decision but does not force execution, broaden scope, or bypass policy. The prefilter decides only whether planning is useful; it never grants tool authority.
+Clients may set `X-Helmora-Tools: off|auto|force`. Unknown header values return HTTP 400 `invalid_tools_policy`. CORS explicitly permits `X-Helmora-Tools` on approved browser origins and tests the preflight response.
+
+The administrative kill switch is evaluated before any request override:
+
+```ts
+function resolveToolsPolicy(input: {
+  runtimeEnabled: boolean;
+  requestHeader?: string;
+  surfaceDefault: 'off' | 'auto';
+  hasEligibleTools: boolean;
+  relevanceMatched: boolean;
+}): 'off' | 'auto' | 'force' {
+  if (!input.runtimeEnabled) return 'off';
+
+  const requested =
+    parseToolsHeader(input.requestHeader) ?? input.surfaceDefault;
+
+  if (requested === 'off') return 'off';
+  if (!input.hasEligibleTools) return 'off';
+  if (requested === 'auto' && !input.relevanceMatched) return 'off';
+  return requested;
+}
+```
+
+Resolution is therefore global runtime enabled → valid request override or surface default → tool scope/eligibility → `auto` relevance gate → schema and policy authorization. `force` bypasses only the relevance gate. It cannot enable an administratively disabled runtime, broaden scope, register a tool, or bypass argument/policy checks.
 
 Tools disabled, no eligible tools, or an `auto` request with no relevance signal do not call the Tool Orchestrator. This avoids an extra model request for ordinary turns such as “Xin chào.”
 
@@ -316,7 +347,7 @@ Accepts the complete version 1 non-secret draft and applies it as one logical up
 
 Creates, rotates, or explicitly clears the encrypted TinyFish credential through the connector vault. It is separate from configuration updates and returns only masked credential metadata.
 
-### `POST /api/tools/connectors/:id/test`
+### `POST /api/tools/connectors/tinyfish/test`
 
 Runs a small administrator-initiated connectivity test. TinyFish testing uses a bounded Search request and never invokes Agent or Browser. The response is redacted and creates an audit entry.
 
@@ -328,6 +359,8 @@ GET  /api/tools/activity
 
 All Tool admin endpoints require admin authentication. No approval endpoint is shipped until durable write-run continuation is specified.
 
+Connector testing bypasses the result cache and uses one fixed harmless Search query so stale cached data cannot validate a rotated or expired credential. It still passes through the normal timeout, limiter, retry budget, redaction, and audit policy; the audit source is `admin_connector_test`. The response contains only redacted health/result metadata and never the raw upstream body. `GET /api/tools/activity` supports a bounded limit/cursor contract and returns only allowlisted audit dimensions.
+
 ## Public Runtime Compatibility
 
 Existing OpenAI-compatible `/v1` response shapes remain valid. Internal tool calls do not leak provider secrets or replace the canonical response model identity.
@@ -338,6 +371,8 @@ Existing OpenAI-compatible `/v1` response shapes remain valid. Internal tool cal
 - Admin Playground uses its authenticated chat stream to receive richer `tool_activity` events without extending the public OpenAI event contract.
 
 Public streaming order is keepalive comments followed by normal OpenAI chunks and `[DONE]`. Admin chat ordering is `metadata`, zero or more `tool_activity` events, normal chunks, then `[DONE]`. SSE comments such as `: helmora-tool-runtime keepalive` prevent idle proxy timeouts without creating a non-standard public event.
+
+One root `AbortSignal` spans planning, connector execution, retries, native tool rounds, and final answer generation. Client disconnect or Playground Stop aborts the entire chain, prevents late activity events, and persists terminal audit/usage state at most once without unhandled rejections.
 
 ## Playground Activity Contract
 
@@ -355,6 +390,19 @@ type ToolActivityEvent = {
   errorCode?: string;
 };
 ```
+
+Activity is persisted with the assistant message it supports through the Hub chat store:
+
+```ts
+type ChatToolActivity = ToolActivityEvent;
+
+type StoredChatMessage = {
+  // existing fields
+  toolActivities?: ChatToolActivity[];
+};
+```
+
+SQLite and Supabase add this as a backward-compatible schema field. Existing rows normalize a missing value to `[]`; migration never resets chat history. On restore, a persisted `running` activity without a live owning generation is terminalized as `failed` with `errorCode: 'run_interrupted'`, so interrupted searches never remain visually active forever. The legacy browser-history import remains readable but is not the active persistence model.
 
 Events contain only allowlisted display fields. A Search row displays the query and resulting source count. A Fetch row displays a redacted safe URL. Running rows start expanded; completed rows collapse automatically but remain keyboard-accessible. Failed states remain expanded until acknowledged.
 
@@ -423,11 +471,14 @@ Connector credentials live in the encrypted connector vault described above, nev
 Every provider model call in a tool loop is metered from day one. Usage records gain nullable lineage fields:
 
 ```ts
+type ToolUsagePhase = 'tool_planner' | 'tool_answer_round';
+
 type ToolUsageLineage = {
-  source: 'api' | 'admin_chat' | 'tool_orchestrator' | 'tool_answer_round';
+  source: 'api' | 'admin_chat';
   parentRequestId: string | null;
   toolRunId: string | null;
-  round: number | null;
+  toolRound: number | null;
+  usagePhase: ToolUsagePhase | null;
 };
 ```
 
@@ -445,6 +496,7 @@ Public-safe error types include:
 - `tool_orchestrator_unavailable`
 - `tool_execution_failed`
 - `client_tools_unsupported`
+- `invalid_tools_policy`
 
 Responses include a request ID and tool ID where safe, never connector credentials or raw upstream payloads.
 
@@ -456,11 +508,12 @@ Responses include a request ID and tool ID where safe, never connector credentia
 - Connector-vault encryption, control-vault/outbox behavior, masked DTOs, and the absence of secrets from `tool_runtime_v1`.
 - Server-owned registry immutability and rejection of admin-submitted connector/risk/schema fields.
 - TinyFish Search/Fetch request mapping and response normalization.
-- Search freshness/date validation and Fetch URL security validation, including alternate IPv4 forms, IPv4-mapped IPv6, trailing-dot localhost, metadata/link-local hosts, ports, punycode, redirects, DNS rebinding, and fragment stripping.
+- Search freshness/date validation and Fetch URL security validation, including alternate IPv4 forms, IPv4-mapped IPv6, trailing-dot localhost, metadata/link-local hosts, ports, punycode, all current DNS records, available redirect metadata, and fragment stripping. Tests do not claim socket-level DNS pinning through TinyFish.
 - Rate-limit accounting by request versus URL, bounded cache behavior, retry taxonomy, and backoff budget.
 - Sensitive/signed Fetch URLs bypass cache and activity redacts their query parameters.
-- Request defaults, `off|auto|force`, deterministic relevance gating, and proof that the gate grants no authority.
+- Request defaults, kill-switch-first `off|auto|force` resolution, deterministic relevance gating, and proof that `force` bypasses relevance only.
 - Native capability selection, orchestrator primary/fallback, loop limits, call deduplication, and result truncation.
+- Root cancellation through planner, connector, retries, native rounds, final answer, audit, and activity emission.
 - Tool content cannot mutate system, identity, routing, scope, or approval state.
 
 ### Hub integration tests
@@ -468,6 +521,7 @@ Responses include a request ID and tool ID where safe, never connector credentia
 - GET masks secrets and resolves catalog summaries.
 - PUT rejects invalid schema/catalog/risk/scope data but accepts temporarily unhealthy selections with warnings.
 - Connector test calls only approved TinyFish Search/Fetch hosts.
+- Connector test and activity endpoints require admin auth, paginate/bound results, and return no secret or raw upstream body. Connector test bypasses result cache, uses the fixed harmless query, and records `admin_connector_test`.
 - Fetch quota reservation rejects an over-budget URL batch atomically; cache hits consume no upstream quota and `Retry-After` is honored.
 - Mini, catalog, mode, and direct routes receive the same eligible tool projection.
 - Mini/Playground defaults and explicit-route opt-in/opt-out behave as documented; client-supplied OpenAI tools are rejected explicitly.
@@ -475,8 +529,10 @@ Responses include a request ID and tool ID where safe, never connector credentia
 - Admin chat emits ordered, redacted tool activity events.
 - Public streaming emits standards-valid keepalive comments, no raw provider tool protocol, and preserves final model identity.
 - Headers are exposed through CORS.
+- `X-Helmora-Tools` preflight allowlisting, invalid enum rejection, and policy precedence are asserted.
+- Existing chat rows survive the additive tool-activity migration in SQLite and Supabase; orphaned `running` activities restore as `failed/run_interrupted`.
 - SQLite and Supabase store safe audit dimensions without arguments or content.
-- Orchestrator and answer-round usage is attributed to the root request/API-key budget without double counting.
+- Orchestrator and answer-round usage is attributed to the root request/API-key budget without double counting, with explicit `tool_planner`/`tool_answer_round` usage phases.
 
 ### Frontend verification
 
