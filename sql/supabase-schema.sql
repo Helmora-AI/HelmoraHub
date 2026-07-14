@@ -75,11 +75,32 @@ create table if not exists public.helmora_connector_credentials (
   updated_at bigint not null
 );
 
+create table if not exists public.helmora_tool_runs (
+  id text primary key,
+  request_id text not null,
+  tool_id text not null,
+  connector text not null,
+  surface text not null,
+  source text not null,
+  answer_catalog_id text,
+  planner_catalog_id text,
+  risk text not null,
+  status text not null,
+  duration_ms integer,
+  source_count integer,
+  error_code text,
+  created_at bigint not null
+);
+
+create index if not exists helmora_tool_runs_created_idx
+  on public.helmora_tool_runs (created_at desc, id desc);
+
 -- Lock down: only service_role (server) should access these tables.
 alter table public.helmora_settings enable row level security;
 alter table public.helmora_providers enable row level security;
 alter table public.helmora_agents enable row level security;
 alter table public.helmora_connector_credentials enable row level security;
+alter table public.helmora_tool_runs enable row level security;
 
 -- No policies for anon/authenticated → denied by default.
 -- service_role bypasses RLS.

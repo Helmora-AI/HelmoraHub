@@ -270,14 +270,14 @@ Canonical bounded tool loop
 **Description:** Add process-local Search-request and Fetch-URL quota accounting, bounded/versioned caches, retry budgets with `Retry-After`, connector health, and safe tool-run audit persistence.
 
 **Acceptance criteria:**
-- [ ] Cache hits reserve no quota; uncached Fetch batches reserve atomically or fail without partial execution.
-- [ ] Retryable statuses stay within attempt/wall-clock budgets; credential/throttle health is observable.
-- [ ] Audit rows omit arguments, content, raw URLs, headers, and secrets across SQLite/Supabase.
+- [x] Cache hits reserve no quota; uncached Fetch batches reserve atomically or fail without partial execution.
+- [x] Retryable statuses stay within attempt/wall-clock budgets; credential/throttle health is observable.
+- [x] Audit rows omit arguments, content, raw URLs, headers, and secrets across SQLite/Supabase.
 
 **Verification:**
-- [ ] RED then GREEN: focused `tool-runtime.test.ts` limiter/cache/retry cases
-- [ ] RED then GREEN: focused SQLite/Supabase tool-audit tests
-- [ ] `npm.cmd run typecheck`
+- [x] RED then GREEN: focused `tool-runtime.test.ts` limiter/cache/retry cases
+- [x] RED then GREEN: focused SQLite/Supabase tool-audit tests
+- [x] `npm.cmd run typecheck`
 
 **Dependencies:** Tasks 8–9
 
@@ -340,9 +340,9 @@ Canonical bounded tool loop
 
 ## Checkpoint: TinyFish Execution Foundation
 
-- [ ] Search/Fetch mapping and URL abuse tests pass without live credentials.
-- [ ] Limiter/cache/retry behavior is deterministic and bounded.
-- [ ] Connector health and audit contain no sensitive payloads.
+- [x] Search/Fetch mapping and URL abuse tests pass without live credentials.
+- [x] Limiter/cache/retry behavior is deterministic and bounded.
+- [x] Connector health and audit contain no sensitive payloads.
 - [ ] `/tools` configures and tests the connector and reads bounded safe activity while runtime execution remains gated.
 
 ### Task 11: Request policy and eligible tool projection

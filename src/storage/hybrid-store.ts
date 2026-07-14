@@ -45,6 +45,8 @@ import type {
   ConnectorCredentialState,
   ConnectorCredentialUpdate,
   ProviderPatch,
+  ToolRunCreate,
+  ToolRunRecord,
 } from './types.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import type {
@@ -696,6 +698,14 @@ export class HybridConfigStore implements ConfigStore {
 
   async listUsage(opts?: { apiKeyId?: string; limit?: number }): Promise<UsageEvent[]> {
     return this.workspace.listUsage(opts);
+  }
+
+  async recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord> {
+    return this.workspace.recordToolRun(input);
+  }
+
+  async listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]> {
+    return this.workspace.listToolRuns(opts);
   }
 
   async getPricingOverrides(): Promise<Record<string, ModelPricing>> {

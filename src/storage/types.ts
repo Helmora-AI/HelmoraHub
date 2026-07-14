@@ -16,7 +16,34 @@ import type {
   UpdateHubModelInput,
 } from '../models/types.js';
 import type { ChatStoreMethods } from './chat-types.js';
-import type { RegisteredConnectorId } from '../tools/types.js';
+import type {
+  RegisteredConnectorId,
+  RegisteredToolId,
+  ToolRisk,
+  ToolSurface,
+} from '../tools/types.js';
+
+export type ToolRunSource = 'runtime' | 'admin_connector_test';
+export type ToolRunStatus = 'running' | 'completed' | 'failed' | 'rejected';
+
+export type ToolRunRecord = {
+  id: string;
+  requestId: string;
+  toolId: RegisteredToolId;
+  connector: RegisteredConnectorId;
+  surface: ToolSurface;
+  source: ToolRunSource;
+  answerCatalogId: string | null;
+  plannerCatalogId: string | null;
+  risk: ToolRisk;
+  status: ToolRunStatus;
+  durationMs: number | null;
+  sourceCount: number | null;
+  errorCode: string | null;
+  createdAt: number;
+};
+
+export type ToolRunCreate = Omit<ToolRunRecord, 'id' | 'createdAt'> & { id?: string };
 
 export type ConnectorCredentialRecord = {
   connectorId: RegisteredConnectorId;
@@ -112,6 +139,8 @@ export interface ConfigStore extends ChatStoreMethods {
 
   recordUsage(event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }): Promise<UsageEvent>;
   listUsage(opts?: { apiKeyId?: string; limit?: number }): Promise<UsageEvent[]>;
+  recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord>;
+  listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]>;
 
   getPricingOverrides(): Promise<Record<string, ModelPricing>>;
   setPricingOverrides(map: Record<string, ModelPricing>): Promise<void>;

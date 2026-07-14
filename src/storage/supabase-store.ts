@@ -42,7 +42,10 @@ import type {
   ConnectorCredentialState,
   ConnectorCredentialUpdate,
   ProviderPatch,
+  ToolRunCreate,
+  ToolRunRecord,
 } from './types.js';
+import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   CHAT_ACTIVE_SETTING_KEY,
@@ -151,6 +154,7 @@ export class SupabaseConfigStore implements ConfigStore {
   readonly backend = 'supabase' as const;
   private client: SupabaseClient;
   private encryptionKey: string;
+  private readonly liveToolRunIds = new Set<string>();
 
   constructor(config: Config) {
     if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
@@ -957,6 +961,27 @@ export class SupabaseConfigStore implements ConfigStore {
       events = events.filter((e) => e.apiKeyId === opts.apiKeyId);
     }
     return [...events].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  }
+
+  async recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord> {
+    const record = createToolRunRecord(input, randomId('toolrun'), Date.now());
+    const { error } = await this.client.from(HEL_TABLE.toolRuns).insert(toolRunToRow(record));
+    if (error) throw formatSupabaseControlError('recordToolRun', error.message);
+    if (record.status === 'running') this.liveToolRunIds.add(record.id);
+    return record;
+  }
+
+  async listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]> {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+    const { data, error } = await this.client
+      .from(HEL_TABLE.toolRuns)
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw formatSupabaseControlError('listToolRuns', error.message);
+    return (data ?? []).map((row) => toolRunFromRow(row as Record<string, unknown>, {
+      preserveRunning: this.liveToolRunIds.has(String((row as Record<string, unknown>).id)),
+    }));
   }
 
   async getPricingOverrides(): Promise<Record<string, ModelPricing>> {

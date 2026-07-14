@@ -34,6 +34,9 @@ describe('supabase-schema helpers', () => {
     expect(sql).toContain('helmora_providers');
     expect(sql).toContain('create table if not exists public.helmora_connector_credentials');
     expect(sql).toContain('encrypted_secret text not null');
+    expect(sql).toContain('create table if not exists public.helmora_tool_runs');
+    expect(sql).toContain('alter table public.helmora_tool_runs enable row level security');
+    expect(sql).not.toContain('raw_url text');
   });
 
   it('exposes API hints', () => {

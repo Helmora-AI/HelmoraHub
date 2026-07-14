@@ -46,7 +46,10 @@ import type {
   ConnectorCredentialState,
   ConnectorCredentialUpdate,
   ProviderPatch,
+  ToolRunCreate,
+  ToolRunRecord,
 } from './types.js';
+import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   createHubModelSync,
@@ -134,6 +137,7 @@ export class SqliteConfigStore implements ConfigStore {
   readonly backend = 'sqlite' as const;
   private db: Database.Database;
   private encryptionKey: string | null;
+  private readonly liveToolRunIds = new Set<string>();
 
   constructor(config: Config) {
     fs.mkdirSync(config.dataDir, { recursive: true });
@@ -324,6 +328,26 @@ export class SqliteConfigStore implements ConfigStore {
         estimated INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS tool_runs (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        tool_id TEXT NOT NULL,
+        connector TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        source TEXT NOT NULL,
+        answer_catalog_id TEXT,
+        planner_catalog_id TEXT,
+        risk TEXT NOT NULL,
+        status TEXT NOT NULL,
+        duration_ms INTEGER,
+        source_count INTEGER,
+        error_code TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS tool_runs_created_idx
+        ON tool_runs (created_at DESC, id DESC);
     `);
 
     this.ensureProviderColumns();
@@ -1192,6 +1216,30 @@ export class SqliteConfigStore implements ConfigStore {
     ) as UsageRow[];
 
     return rows.map((row) => this.mapUsageRow(row));
+  }
+
+  async recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord> {
+    const record = createToolRunRecord(input, randomId('toolrun'), Date.now());
+    const row = toolRunToRow(record);
+    this.db.prepare(
+      `INSERT INTO tool_runs
+        (id, request_id, tool_id, connector, surface, source, answer_catalog_id,
+         planner_catalog_id, risk, status, duration_ms, source_count, error_code, created_at)
+       VALUES (@id, @request_id, @tool_id, @connector, @surface, @source, @answer_catalog_id,
+         @planner_catalog_id, @risk, @status, @duration_ms, @source_count, @error_code, @created_at)`
+    ).run(row);
+    if (record.status === 'running') this.liveToolRunIds.add(record.id);
+    return record;
+  }
+
+  async listToolRuns(opts?: { limit?: number }): Promise<ToolRunRecord[]> {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+    const rows = this.db.prepare(
+      `SELECT * FROM tool_runs ORDER BY created_at DESC, id DESC LIMIT ?`
+    ).all(limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => toolRunFromRow(row, {
+      preserveRunning: this.liveToolRunIds.has(String(row.id)),
+    }));
   }
 
   async getPricingOverrides(): Promise<Record<string, ModelPricing>> {
