@@ -3,7 +3,12 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAdminSession } from '../middleware/requireAdminSession.js';
 import { resolveMode } from '../services/mode-router.js';
-import { routeChat, routeChatStream } from '../services/tier-router.js';
+import {
+  routeChat,
+  routeChatStream,
+  routeMiniChat,
+  routeMiniChatStream,
+} from '../services/tier-router.js';
 import { listProviders } from '../db/index.js';
 import { HUB_MODES, type HubMode, type ProviderToggle } from '../types.js';
 import { isMetaModel, type TokenUsage } from '../keys/types.js';
@@ -25,7 +30,8 @@ import {
   guardOutputText,
 } from '../guardrail/index.js';
 import { resolveRouteIdentity, prepareUpstreamMessages } from '../services/identity-context.js';
-import { resolveMiniRouteChain } from '../services/mini-route.js';
+import { resolveMiniRuntimeAttempts } from '../services/mini-route.js';
+import { classifyMiniIntent } from '../services/mini-classifier.js';
 import { mountChatHistoryRoutes } from './chat-history.js';
 
 export const chatRouter = Router();
@@ -77,11 +83,16 @@ type ResolvedChatModel = {
   thinkingApplied: boolean;
   /** Catalog displayName when resolved from catalog/* */
   displayName: string | null;
+  mini: {
+    classification: ReturnType<typeof classifyMiniIntent>;
+    resolution: Awaited<ReturnType<typeof resolveMiniRuntimeAttempts>>;
+  } | null;
 };
 
 async function resolveChatModel(
   modelRef: string,
-  thinking?: boolean
+  thinking: boolean | undefined,
+  messages: z.infer<typeof chatSchema>['messages']
 ): Promise<
   | { ok: true; value: ResolvedChatModel }
   | { ok: false; status: number; type: string; message: string }
@@ -101,22 +112,52 @@ async function resolveChatModel(
   }
 
   if (modelRef === 'auto' || isMetaModel(modelRef)) {
-    const mini = await resolveMiniRouteChain();
+    const userTexts = messages
+      .filter((message) => message.role === 'user')
+      .map((message) => message.content)
+      .filter(Boolean);
+    const classification = classifyMiniIntent({
+      latestUserText: userTexts.at(-1) ?? '',
+      previousUserText: userTexts.at(-2),
+    });
+    const mini = {
+      classification,
+      resolution: await resolveMiniRuntimeAttempts(classification.role),
+    };
+    if (!mini.resolution.enabled) {
+      return { ok: false, status: 503, type: 'mini_disabled', message: 'Helmora Mini is disabled.' };
+    }
+    if (!mini.resolution.configured) {
+      return {
+        ok: false,
+        status: 503,
+        type: 'mini_role_unconfigured',
+        message: `No model is configured for the ${classification.role} role.`,
+      };
+    }
+    if (mini.resolution.attempts.length === 0) {
+      return {
+        ok: false,
+        status: 503,
+        type: 'mini_role_unavailable',
+        message: `No configured model is currently available for the ${classification.role} role.`,
+      };
+    }
+    const mode = await resolveMode(null);
     return {
       ok: true,
       value: {
         requestedModel: modelRef,
         upstreamModel: 'auto',
-        mode: mini.mode,
+        mode,
         onlyProviderId: null,
-        preferredChain: mini.chain,
-        modelByProvider: Object.keys(mini.modelByProvider).length
-          ? mini.modelByProvider
-          : null,
+        preferredChain: null,
+        modelByProvider: null,
         meta: true,
         thinkingRequested,
         thinkingApplied,
         displayName: 'Helmora Mini 1.0',
+        mini,
       },
     };
   }
@@ -137,6 +178,7 @@ async function resolveChatModel(
         thinkingRequested,
         thinkingApplied,
         displayName: 'Helmora Mini 1.0',
+        mini: null,
       },
     };
   }
@@ -180,6 +222,7 @@ async function resolveChatModel(
       thinkingRequested,
       thinkingApplied,
       displayName: row.displayName ?? row.modelId,
+      mini: null,
     },
   };
 }
@@ -251,7 +294,7 @@ chatRouter.post('/completions', async (req, res, next) => {
     }
 
     const body = parsed.data;
-    const resolved = await resolveChatModel(body.model, body.thinking);
+    const resolved = await resolveChatModel(body.model, body.thinking, body.messages);
     if (!resolved.ok) {
       res.status(resolved.status).json({
         error: { message: resolved.message, type: resolved.type },
@@ -333,12 +376,24 @@ chatRouter.post('/completions', async (req, res, next) => {
         if (!res.writableFinished) ac.abort();
       };
       res.on('close', onClose);
-      let result: Awaited<ReturnType<typeof routeChat>>;
+      let result:
+        | Awaited<ReturnType<typeof routeChat>>
+        | Awaited<ReturnType<typeof routeMiniChat>>;
       try {
-        result = await routeChat(compressedReq as never, {
-          ...opts,
-          signal: ac.signal,
-        });
+        result = ctx.mini
+          ? await routeMiniChat(
+              compressedReq as never,
+              ctx.mini.resolution.attempts,
+              {
+                mode: ctx.mode,
+                identity: identityResolved.identity,
+                signal: ac.signal,
+              }
+            )
+          : await routeChat(compressedReq as never, {
+              ...opts,
+              signal: ac.signal,
+            });
       } finally {
         res.off('close', onClose);
       }
@@ -405,10 +460,20 @@ chatRouter.post('/completions', async (req, res, next) => {
     };
     res.on('close', onClientGone);
 
-    const result = await routeChatStream(compressedReq as never, {
-      ...opts,
-      signal: ac.signal,
-    });
+    const result = ctx.mini
+      ? await routeMiniChatStream(
+          compressedReq as never,
+          ctx.mini.resolution.attempts,
+          {
+            mode: ctx.mode,
+            identity: identityResolved.identity,
+            signal: ac.signal,
+          }
+        )
+      : await routeChatStream(compressedReq as never, {
+          ...opts,
+          signal: ac.signal,
+        });
 
     if (!result.ok) {
       res.off('close', onClientGone);

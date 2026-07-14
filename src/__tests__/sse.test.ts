@@ -7,6 +7,7 @@ import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage } from '../storage/index.js';
 import { createApp } from '../app.js';
 import type { Express } from 'express';
+import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 
 let app: Express;
 let tmpDir: string;
@@ -32,7 +33,23 @@ beforeAll(async () => {
 
   // bootstrap key from storage
   const { getConfigStore } = await import('../storage/index.js');
-  apiKey = await getConfigStore().getUnifiedApiKey();
+  const store = getConfigStore();
+  apiKey = await store.getUnifiedApiKey();
+  await store.updateProvider('paid-upstream', {
+    enabled: true,
+    verifyStatus: 'ok',
+  });
+  const model = await store.createHubModel({
+    providerId: 'paid-upstream',
+    modelId: 'demo/sse-mini',
+  });
+  await setMiniRoleConfig(normalizeMiniRoleConfig({
+    version: 2,
+    enabled: true,
+    roles: {
+      general: { primaryCatalogId: model.id, fallbackCatalogId: null },
+    },
+  }));
 });
 
 afterAll(async () => {
@@ -84,6 +101,31 @@ describe('SSE streaming', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.choices[0].message.content).toContain('Helmora AI demo');
+    expect(res.body.model).toBe('demo/sse-mini');
+  });
+
+  it('keeps auto as an alias for the canonical Mini route', async () => {
+    const canonical = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({
+        model: 'helmora-mini-1.0',
+        stream: false,
+        messages: [{ role: 'user', content: 'hello canonical Mini' }],
+      });
+    const alias = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({
+        model: 'auto',
+        stream: false,
+        messages: [{ role: 'user', content: 'hello alias Mini' }],
+      });
+
+    expect(canonical.status).toBe(200);
+    expect(alias.status).toBe(200);
+    expect(canonical.body.model).toBe('demo/sse-mini');
+    expect(alias.body.model).toBe('demo/sse-mini');
   });
 
   it('sets SSE headers used by proxies / coding clients', async () => {

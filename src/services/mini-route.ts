@@ -121,6 +121,10 @@ export type MiniCatalogAttemptResolution = {
   skipped: MiniSkippedCatalogAttempt[];
 };
 
+export type MiniRuntimeResolution = MiniCatalogAttemptResolution & {
+  enabled: boolean;
+};
+
 export const MINI_ROLE_METADATA: ReadonlyArray<{
   id: MiniRole;
   description: string;
@@ -394,6 +398,20 @@ export function resolveMiniCatalogAttempts(
   };
 }
 
+export async function resolveMiniRuntimeAttempts(
+  role: MiniRole
+): Promise<MiniRuntimeResolution> {
+  const [projection, providers, catalog] = await Promise.all([
+    getMiniRoleConfigProjection(),
+    listProviders(),
+    getConfigStore().listHubModels({ limit: 500 }),
+  ]);
+  return {
+    enabled: projection.config.enabled,
+    ...resolveMiniCatalogAttempts(projection.config, role, catalog.models, providers),
+  };
+}
+
 export function validateMiniRoleConfigReferences(
   config: MiniRoleConfig,
   catalog: readonly StoredHubModel[],
@@ -452,6 +470,7 @@ export function validateMiniRoleConfigReferences(
 }
 
 function providerNeedsCredentials(provider: ProviderToggle): boolean {
+  if (!provider.baseUrl) return false;
   if (provider.authStyle === 'none' || provider.protocol === 'keyless') return false;
   if (provider.authMode === 'oauth') return provider.oauthState !== 'connected';
   return !provider.apiKey;

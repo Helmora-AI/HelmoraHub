@@ -18,6 +18,7 @@ import {
   resolvePublicModelName,
   type IdentitySurface,
 } from './identity-context.js';
+import type { MiniCatalogAttempt } from './mini-route.js';
 
 export interface RouteChatIdentityOptions {
   enabled: boolean;
@@ -43,6 +44,51 @@ export type CrossModelRetryDecision = {
   reason: CrossModelRetryReason;
   healthEffect: 'none' | 'degraded' | 'invalid_credentials';
 };
+
+export type MiniRouteAttemptRecord = {
+  role: MiniCatalogAttempt['role'];
+  slot: MiniCatalogAttempt['slot'];
+  catalogId: string;
+  providerId: string;
+  modelId: string;
+  status: number;
+  error?: string;
+  retry?: CrossModelRetryDecision;
+};
+
+export interface RouteMiniChatOptions {
+  mode: HubMode;
+  signal?: AbortSignal;
+  identity?: RouteChatIdentityOptions | null;
+}
+
+export interface RouteMiniChatResult extends UpstreamResult {
+  mode: HubMode;
+  attempts: MiniRouteAttemptRecord[];
+  selectedAttempt: MiniCatalogAttempt | null;
+}
+
+export type RouteMiniChatStreamResult =
+  | {
+      ok: true;
+      mode: HubMode;
+      providerId: string;
+      model: string;
+      attempts: MiniRouteAttemptRecord[];
+      selectedAttempt: MiniCatalogAttempt;
+      stream: Extract<UpstreamStreamResult, { ok: true }>;
+    }
+  | {
+      ok: false;
+      mode: HubMode;
+      status: number;
+      providerId: string;
+      model: string;
+      body: unknown;
+      error?: string;
+      attempts: MiniRouteAttemptRecord[];
+      selectedAttempt: null;
+    };
 
 export function normalizeCrossModelRetry(input: {
   status: number;
@@ -82,6 +128,246 @@ export function normalizeCrossModelRetry(input: {
     return { retryable: true, reason: 'upstream_unavailable', healthEffect: 'degraded' };
   }
   return { retryable: false, reason: 'request_invalid', healthEffect: 'none' };
+}
+
+function hasVisibleContentDelta(chunk: Record<string, unknown>): boolean {
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+  return choices.some((choice) => {
+    if (!choice || typeof choice !== 'object') return false;
+    const delta = (choice as { delta?: unknown }).delta;
+    if (!delta || typeof delta !== 'object') return false;
+    const content = (delta as { content?: unknown }).content;
+    return typeof content === 'string' && content.length > 0;
+  });
+}
+
+function miniUnavailableResult(
+  request: ChatRequest,
+  options: RouteMiniChatOptions,
+  attempts: MiniRouteAttemptRecord[]
+): RouteMiniChatResult {
+  const last = attempts.at(-1);
+  return {
+    ok: false,
+    status: last?.status ?? 503,
+    providerId: last?.providerId ?? 'none',
+    model: last?.modelId ?? request.model ?? 'helmora-mini-1.0',
+    body: {
+      error: {
+        message: 'All configured models for the selected Mini role are unavailable.',
+        type: 'mini_role_unavailable',
+      },
+    },
+    error: 'Mini role unavailable',
+    mode: options.mode,
+    attempts,
+    selectedAttempt: null,
+  };
+}
+
+export async function routeMiniChat(
+  request: ChatRequest,
+  catalogAttempts: readonly MiniCatalogAttempt[],
+  options: RouteMiniChatOptions
+): Promise<RouteMiniChatResult> {
+  const rate = rates();
+  const attempts: MiniRouteAttemptRecord[] = [];
+
+  for (const attempt of catalogAttempts) {
+    if (await rate.isCoolingDown(attempt.provider.id)) {
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 429,
+        error: 'provider_cooldown',
+        retry: normalizeCrossModelRetry({ status: 429, error: 'provider_cooldown' }),
+      });
+      continue;
+    }
+
+    const rpm = await rate.incrRpm(attempt.provider.id);
+    if (rpm > RPM_SOFT_LIMIT) {
+      await rate.setCooldown(attempt.provider.id, DEFAULT_COOLDOWN_SECONDS);
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 429,
+        error: `rpm_soft_limit_${RPM_SOFT_LIMIT}`,
+        retry: normalizeCrossModelRetry({ status: 429 }),
+      });
+      continue;
+    }
+
+    const pinned = { ...request, stream: false, model: attempt.modelId };
+    const attemptRequest = withAttemptIdentity(pinned, attempt.provider, options.identity);
+    const result = attempt.provider.baseUrl
+      ? await dispatchChat(attempt.provider, attemptRequest, options.signal)
+      : demoCompletion(attempt.provider, attemptRequest);
+    const record: MiniRouteAttemptRecord = {
+      role: attempt.role,
+      slot: attempt.slot,
+      catalogId: attempt.catalogId,
+      providerId: attempt.provider.id,
+      modelId: attempt.modelId,
+      status: result.status,
+      error: result.error,
+    };
+    attempts.push(record);
+
+    if (result.ok) {
+      return { ...result, mode: options.mode, attempts, selectedAttempt: attempt };
+    }
+
+    const retry = normalizeCrossModelRetry(result);
+    record.retry = retry;
+    if (!retry.retryable) {
+      return { ...result, mode: options.mode, attempts, selectedAttempt: null };
+    }
+    if (retry.healthEffect === 'degraded') {
+      await rate.setCooldown(attempt.provider.id, DEFAULT_COOLDOWN_SECONDS);
+    }
+  }
+
+  return miniUnavailableResult(request, options, attempts);
+}
+
+export async function routeMiniChatStream(
+  request: ChatRequest,
+  catalogAttempts: readonly MiniCatalogAttempt[],
+  options: RouteMiniChatOptions
+): Promise<RouteMiniChatStreamResult> {
+  const rate = rates();
+  const attempts: MiniRouteAttemptRecord[] = [];
+
+  for (const attempt of catalogAttempts) {
+    if (await rate.isCoolingDown(attempt.provider.id)) {
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 429,
+        error: 'provider_cooldown',
+        retry: normalizeCrossModelRetry({ status: 429 }),
+      });
+      continue;
+    }
+
+    const pinned = { ...request, stream: true, model: attempt.modelId };
+    const attemptRequest = withAttemptIdentity(pinned, attempt.provider, options.identity);
+    const result = attempt.provider.baseUrl
+      ? await dispatchChatStream(attempt.provider, attemptRequest, options.signal)
+      : demoCompletionStream(attempt.provider, attemptRequest);
+
+    if (!result.ok) {
+      const retry = normalizeCrossModelRetry(result);
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: result.status,
+        error: result.error,
+        retry,
+      });
+      if (retry.retryable) continue;
+      return {
+        ...result,
+        mode: options.mode,
+        attempts,
+        selectedAttempt: null,
+      };
+    }
+
+    const iterator = result.chunks[Symbol.asyncIterator]();
+    const buffered: Record<string, unknown>[] = [];
+    let committed = false;
+    try {
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) break;
+        buffered.push(next.value);
+        if (hasVisibleContentDelta(next.value)) {
+          committed = true;
+          break;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 502,
+        error: message,
+        retry: normalizeCrossModelRetry({ status: 502, error: message }),
+      });
+      continue;
+    }
+
+    if (!committed) {
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 502,
+        error: 'stream_ended_before_visible_delta',
+        retry: normalizeCrossModelRetry({ status: 502 }),
+      });
+      continue;
+    }
+
+    attempts.push({
+      role: attempt.role,
+      slot: attempt.slot,
+      catalogId: attempt.catalogId,
+      providerId: attempt.provider.id,
+      modelId: attempt.modelId,
+      status: 200,
+    });
+    const chunks = (async function* () {
+      yield* buffered;
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    })();
+    return {
+      ok: true,
+      mode: options.mode,
+      providerId: result.providerId,
+      model: result.model,
+      attempts,
+      selectedAttempt: attempt,
+      stream: { ...result, chunks },
+    };
+  }
+
+  const failed = miniUnavailableResult(request, options, attempts);
+  return {
+    ok: false,
+    mode: failed.mode,
+    status: failed.status,
+    providerId: failed.providerId,
+    model: failed.model,
+    body: failed.body,
+    error: failed.error,
+    attempts: failed.attempts,
+    selectedAttempt: null,
+  };
 }
 
 export interface RouteChatOptions {

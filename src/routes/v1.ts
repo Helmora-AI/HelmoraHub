@@ -3,7 +3,12 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { requireApiKey } from '../middleware/requireApiKey.js';
 import { resolveMode } from '../services/mode-router.js';
-import { routeChat, routeChatStream } from '../services/tier-router.js';
+import {
+  routeChat,
+  routeChatStream,
+  routeMiniChat,
+  routeMiniChatStream,
+} from '../services/tier-router.js';
 import { listProviders, listAgents } from '../db/index.js';
 import { HUB_MODES, type HubMode, type ProviderToggle } from '../types.js';
 import { isMetaModel, META_MODEL_ID, type TokenUsage } from '../keys/types.js';
@@ -32,7 +37,11 @@ import {
 } from '../guardrail/index.js';
 import { routeEmbeddings } from '../services/embeddings.js';
 import { resolveRouteIdentity } from '../services/identity-context.js';
-import { resolveMiniRouteChain } from '../services/mini-route.js';
+import {
+  resolveMiniRouteChain,
+  resolveMiniRuntimeAttempts,
+} from '../services/mini-route.js';
+import { classifyMiniIntent } from '../services/mini-classifier.js';
 
 export const v1Router = Router();
 
@@ -212,6 +221,28 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       req.header('x-ctrl-mode') ??
       req.header('x-ctrlhub-mode');
     const ctx = await buildContext(body, headerMode);
+    if (ctx.mini && !ctx.mini.resolution.enabled) {
+      res.status(503).json({ error: { message: 'Helmora Mini is disabled.', type: 'mini_disabled' } });
+      return;
+    }
+    if (ctx.mini && !ctx.mini.resolution.configured) {
+      res.status(503).json({
+        error: {
+          message: `No model is configured for the ${ctx.mini.classification.role} role.`,
+          type: 'mini_role_unconfigured',
+        },
+      });
+      return;
+    }
+    if (ctx.mini && ctx.mini.resolution.attempts.length === 0) {
+      res.status(503).json({
+        error: {
+          message: `No configured model is currently available for the ${ctx.mini.classification.role} role.`,
+          type: 'mini_role_unavailable',
+        },
+      });
+      return;
+    }
 
     const normalizedMessages = mergeImagesIntoMessages(
       body.messages.map((m) => ({
@@ -299,9 +330,17 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       if (!res.writableFinished) ac.abort();
     };
     res.on('close', onClientGone);
-    let result: Awaited<ReturnType<typeof routeChat>>;
+    let result:
+      | Awaited<ReturnType<typeof routeChat>>
+      | Awaited<ReturnType<typeof routeMiniChat>>;
     try {
-      result = await routeChat(compressedReq, { ...opts, signal: ac.signal });
+      result = ctx.mini
+        ? await routeMiniChat(compressedReq, ctx.mini.resolution.attempts, {
+            mode: ctx.mode,
+            identity: identityResolved.identity,
+            signal: ac.signal,
+          })
+        : await routeChat(compressedReq, { ...opts, signal: ac.signal });
     } finally {
       res.off('close', onClientGone);
     }
@@ -341,6 +380,30 @@ v1Router.post('/chat/completions', async (req, res, next) => {
 
 type ChatBody = z.infer<typeof chatSchema>;
 
+function miniUserText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (!part || typeof part !== 'object') return '';
+      const text = (part as { text?: unknown }).text;
+      return typeof text === 'string' ? text : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function miniClassifierContext(messages: ChatBody['messages']) {
+  const userTexts = messages
+    .filter((message) => message.role === 'user')
+    .map((message) => miniUserText(message.content))
+    .filter(Boolean);
+  return {
+    latestUserText: userTexts.at(-1) ?? '',
+    previousUserText: userTexts.at(-2),
+  };
+}
+
 async function buildContext(body: ChatBody, headerMode: string | null | undefined) {
   let mode = await resolveMode(headerMode);
   if (body.model?.startsWith('mode/')) {
@@ -359,20 +422,23 @@ async function buildContext(body: ChatBody, headerMode: string | null | undefine
 
   let preferredChain: ProviderToggle[] | null = null;
   let modelByProvider: Record<string, string> | null = null;
+  let mini: {
+    classification: ReturnType<typeof classifyMiniIntent>;
+    resolution: Awaited<ReturnType<typeof resolveMiniRuntimeAttempts>>;
+  } | null = null;
 
   if (meta && !body.model?.startsWith('mode/')) {
-    const mini = await resolveMiniRouteChain();
-    mode = mini.mode;
-    preferredChain = mini.chain;
-    modelByProvider = Object.keys(mini.modelByProvider).length
-      ? mini.modelByProvider
-      : null;
+    const classification = classifyMiniIntent(miniClassifierContext(body.messages));
+    mini = {
+      classification,
+      resolution: await resolveMiniRuntimeAttempts(classification.role),
+    };
     model = 'auto';
   } else if (meta) {
     model = 'auto';
   }
 
-  if (body.model?.startsWith('agent/')) {
+  if (!mini && body.model?.startsWith('agent/')) {
     const agentId = body.model.slice('agent/'.length);
     const agent = (await listAgents()).find((a) => a.id === agentId);
     if (agent) {
@@ -392,7 +458,7 @@ async function buildContext(body: ChatBody, headerMode: string | null | undefine
         modelByProvider = null;
       }
     }
-  } else {
+  } else if (!mini) {
     const officeRole = role ?? lane;
     if (officeRole) {
       const agent = (await listAgents()).find((a) => a.id === officeRole && a.enabled);
@@ -431,6 +497,7 @@ async function buildContext(body: ChatBody, headerMode: string | null | undefine
     sessionKey,
     preferredChain,
     modelByProvider,
+    mini,
   };
 }
 
@@ -451,7 +518,13 @@ async function writeSse(
   };
   res.on('close', onClientGone);
 
-  const result = await routeChatStream(chatReq, { ...opts, signal: ac.signal });
+  const result = ctx.mini
+    ? await routeMiniChatStream(chatReq, ctx.mini.resolution.attempts, {
+        mode: ctx.mode,
+        identity: opts.identity,
+        signal: ac.signal,
+      })
+    : await routeChatStream(chatReq, { ...opts, signal: ac.signal });
 
   if (!result.ok) {
     res.off('close', onClientGone);

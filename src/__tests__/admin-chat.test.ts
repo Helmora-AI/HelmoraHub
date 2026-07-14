@@ -7,6 +7,7 @@ import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
 import type { Express } from 'express';
+import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 
 let app: Express;
 let tmpDir: string;
@@ -14,6 +15,7 @@ let spaToken: string;
 let adminToken: string;
 let v1Key: string;
 let catalogId: string;
+let codingCatalogId: string;
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-chat-'));
@@ -53,6 +55,21 @@ beforeAll(async () => {
     displayName: 'Chat Test Model',
   });
   catalogId = created.id;
+  const coding = await store.createHubModel({
+    providerId: 'paid-upstream',
+    modelId: 'demo/chat-coding',
+    displayName: 'Chat Coding Model',
+  });
+  codingCatalogId = coding.id;
+  const miniConfig = normalizeMiniRoleConfig({
+    version: 2,
+    enabled: true,
+    roles: {
+      general: { primaryCatalogId: catalogId, fallbackCatalogId: null },
+      coding: { primaryCatalogId: codingCatalogId, fallbackCatalogId: null },
+    },
+  });
+  await setMiniRoleConfig(miniConfig);
 });
 
 afterAll(async () => {
@@ -119,6 +136,21 @@ describe('POST /api/chat/completions', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.choices?.[0]?.message?.content).toBeTruthy();
+    expect(res.body.model).toBe('demo/chat-test');
+  });
+
+  it('classifies coding prompts and dispatches the coding catalog model', async () => {
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .send({
+        model: 'helmora-mini-1.0',
+        messages: [{ role: 'user', content: 'Implement and debug this TypeScript function.' }],
+        stream: false,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('demo/chat-coding');
   });
 
   it('resolves catalog model ref', async () => {
