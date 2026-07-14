@@ -9,13 +9,14 @@ export class TinyFishConnectorError extends Error {
     message: string,
     public readonly status: number | null,
     public readonly retryable: boolean,
+    public readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = 'TinyFishConnectorError';
   }
 }
 
-function statusError(status: number): TinyFishConnectorError {
+function statusError(status: number, retryAfterMs: number | null): TinyFishConnectorError {
   if (status === 401 || status === 403) {
     return new TinyFishConnectorError(
       'invalid_credentials',
@@ -25,7 +26,13 @@ function statusError(status: number): TinyFishConnectorError {
     );
   }
   if (status === 429) {
-    return new TinyFishConnectorError('rate_limited', 'TinyFish rate limit exceeded.', status, true);
+    return new TinyFishConnectorError(
+      'rate_limited',
+      'TinyFish rate limit exceeded.',
+      status,
+      true,
+      retryAfterMs,
+    );
   }
   if (status === 500 || status === 503) {
     return new TinyFishConnectorError(
@@ -33,6 +40,7 @@ function statusError(status: number): TinyFishConnectorError {
       'TinyFish is temporarily unavailable.',
       status,
       true,
+      retryAfterMs,
     );
   }
   if (status === 400) {
@@ -42,6 +50,14 @@ function statusError(status: number): TinyFishConnectorError {
     return new TinyFishConnectorError('payment_required', 'TinyFish account access is required.', status, false);
   }
   return new TinyFishConnectorError('upstream_error', 'TinyFish request failed.', status, false);
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
 export async function tinyFishJsonRequest(input: {
@@ -77,7 +93,9 @@ export async function tinyFishJsonRequest(input: {
       body: input.body,
       signal: controller.signal,
     });
-    if (!response.ok) throw statusError(response.status);
+    if (!response.ok) {
+      throw statusError(response.status, parseRetryAfter(response.headers.get('Retry-After')));
+    }
     const text = await response.text();
     if (Buffer.byteLength(text, 'utf8') > (input.maxResponseBytes ?? 1_048_576)) {
       throw new TinyFishConnectorError(

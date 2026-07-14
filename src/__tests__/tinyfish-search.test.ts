@@ -131,6 +131,25 @@ describe('TinyFish Search connector', () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [429, 'rate_limited'],
+    [503, 'upstream_unavailable'],
+  ])('normalizes Retry-After on retryable HTTP %s for the bounded retry layer', async (status, code) => {
+    const fetchImpl = vi.fn(async () => new Response(null, {
+      status,
+      headers: { 'Retry-After': '1.5' },
+    }));
+
+    await expect(tinyFishSearch({
+      apiKey: 'tf-key',
+      input: { query: 'hello' },
+      fetchImpl,
+    })).rejects.toMatchObject({
+      code,
+      retryAfterMs: 1_500,
+    });
+  });
+
   it('aborts through the root signal before dispatch', async () => {
     const controller = new AbortController();
     controller.abort();
