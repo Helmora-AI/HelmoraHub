@@ -2,11 +2,11 @@
 
 ## Safe presentation
 
-- [ ] Task 1: Safe assistant Markdown in Playground
+- [ ] Task 1: Safe assistant Markdown in Playground (implemented; browser smoke pending)
 
 ## Control plane
 
-- [ ] Task 2: Immutable registry and versioned runtime configuration
+- [x] Task 2: Immutable registry and versioned runtime configuration
 - [ ] Task 3: SQLite connector credential vault
 - [ ] Task 4: Supabase and hybrid credential synchronization
 - [ ] Task 5: Authenticated Tools admin API
