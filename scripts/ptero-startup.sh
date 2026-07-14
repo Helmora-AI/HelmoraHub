@@ -6,7 +6,7 @@
 #
 # First boot without files — set panel env then restart:
 #   GIT_REPO=https://github.com/Helmora-AI/HelmoraHub.git
-#   GIT_BRANCH=master   (optional)
+#   GIT_BRANCH=main   (optional)
 set -euo pipefail
 
 cd /home/container 2>/dev/null || true
@@ -17,7 +17,7 @@ die() { echo "[helmora] ERROR: $*" >&2; exit 1; }
 # --- bootstrap: clone if empty ---
 if [[ ! -f package.json ]]; then
   if [[ -n "${GIT_REPO:-}" ]]; then
-    BRANCH="${GIT_BRANCH:-master}"
+    BRANCH="${GIT_BRANCH:-main}"
     log "package.json missing — cloning ${GIT_REPO} (${BRANCH})…"
     if [[ -d .git ]]; then
       git fetch --all
@@ -37,7 +37,7 @@ if [[ ! -f package.json ]]; then
     die "No package.json in /home/container.
 Upload Helmora Hub (File Manager / SFTP) OR set:
   GIT_REPO=https://github.com/Helmora-AI/HelmoraHub.git
-  GIT_BRANCH=master
+  GIT_BRANCH=main
 then restart."
   fi
 fi

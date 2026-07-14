@@ -165,8 +165,10 @@ Nếu panel cho sửa **Startup Command** và custom **thay toàn bộ** lệnh 
 **Ngắn** (≤512 ký tự — paste vào panel):
 
 ```bash
-[ -f scripts/ptero-startup.sh ]||(git clone --depth 1 ${GIT_REPO:-https://github.com/Helmora-AI/HelmoraHub.git} /tmp/h&&cp -a /tmp/h/. .&&rm -rf /tmp/h);bash scripts/ptero-startup.sh
+[ -d .git ]||(git clone --depth 1 -b ${GIT_BRANCH:-main} ${GIT_REPO:-https://github.com/Helmora-AI/HelmoraHub.git} /tmp/h&&cp -a /tmp/h/. .&&rm -rf /tmp/h);bash scripts/ptero-startup.sh
 ```
+
+Dùng `[ -d .git ]` (không phải `-f scripts/ptero-startup.sh`) để lần đầu / sau upload zip vẫn lấy được repo Git. Branch mặc định là **`main`**. Sau đó `ptero-startup.sh` lo `git pull` mỗi lần start.
 
 Sau khi đã có source: `bash scripts/ptero-startup.sh`
 
