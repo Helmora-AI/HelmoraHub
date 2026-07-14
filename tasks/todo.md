@@ -17,11 +17,11 @@
 
 ## Admin SPA
 
-- [ ] Task 8: Update frontend API types and make `/agents` Mini-only.
-- [ ] Task 9: Build the approved six-card UI with pure draft helpers.
+- [x] Task 8: Update frontend API types and make `/agents` Mini-only.
+- [x] Task 9: Build the approved six-card UI with pure draft helpers.
 
 ## Completion
 
-- [ ] Task 10: Run full compatibility and quality review.
-- [ ] Confirm both repository diffs contain no unrelated or generated files.
-- [ ] Confirm all approved spec success criteria.
+- [x] Task 10: Run full compatibility and quality review.
+- [x] Confirm both repository diffs contain no unrelated or generated files.
+- [x] Confirm all approved spec success criteria.

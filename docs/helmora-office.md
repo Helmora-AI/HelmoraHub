@@ -12,7 +12,7 @@ Hub already exposes (no admin auth):
 
 Office chat uses `POST /v1/chat/completions` with Hub API keys. Requests may include `role` / `lane` matching desk ids (`coordinator`, `developer`, …).
 
-Admin SPA: `GET /api/office/runtime` — summary for Agents → Office.
+The authenticated `GET /api/office/runtime` endpoint remains available to external Office clients and diagnostics. It is no longer part of the main Admin Agents surface.
 
 ## Desk routing
 
@@ -25,7 +25,7 @@ Admin SPA: `GET /api/office/runtime` — summary for Agents → Office.
 | ops | manual | auto |
 | reviewer | premium | auto |
 
-When `model` is `auto`, Hub applies **Helmora Mini 1.0** multi-model chain (see `mini_route_v1` setting).
+When `model` is `auto`, Hub applies the **Helmora Mini 1.0** six-role router (see the `mini_route_v1` setting). Office desk `role` and `lane` values do not select Mini models.
 
 ## Fork workflow
 
@@ -40,8 +40,9 @@ Connect screen defaults to **Helmora Hub** (URL + `hel_*` key). See `HelmoraOffi
 
 ## Admin UI
 
-- `/agents/office` — desk roster + Virtual Office launcher
-- `/agents/mini` — Mini 1.0 candidate chain
+- `/agents` configures Helmora Mini 1.0 directly.
+- `/agents/mini` redirects to `/agents` for compatibility.
+- Office runs as an external client; `/agents/office` is not an Admin SPA route.
 
 ## Deferred slices
 
