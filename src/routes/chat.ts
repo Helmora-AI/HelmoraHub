@@ -95,7 +95,14 @@ async function resolveChatModel(
   messages: z.infer<typeof chatSchema>['messages']
 ): Promise<
   | { ok: true; value: ResolvedChatModel }
-  | { ok: false; status: number; type: string; message: string }
+  | {
+      ok: false;
+      status: number;
+      type: string;
+      message: string;
+      miniRole?: ReturnType<typeof classifyMiniIntent>['role'];
+      attemptedSlots?: Array<'primary' | 'fallback'>;
+    }
 > {
   const thinkingRequested = Boolean(thinking);
   // Slice 1: no capability matrix — applied only when we actually pass thinking through.
@@ -125,7 +132,14 @@ async function resolveChatModel(
       resolution: await resolveMiniRuntimeAttempts(classification.role),
     };
     if (!mini.resolution.enabled) {
-      return { ok: false, status: 503, type: 'mini_disabled', message: 'Helmora Mini is disabled.' };
+      return {
+        ok: false,
+        status: 503,
+        type: 'mini_disabled',
+        message: 'Helmora Mini is disabled.',
+        miniRole: classification.role,
+        attemptedSlots: [],
+      };
     }
     if (!mini.resolution.configured) {
       return {
@@ -133,6 +147,8 @@ async function resolveChatModel(
         status: 503,
         type: 'mini_role_unconfigured',
         message: `No model is configured for the ${classification.role} role.`,
+        miniRole: classification.role,
+        attemptedSlots: [],
       };
     }
     if (mini.resolution.attempts.length === 0) {
@@ -141,9 +157,11 @@ async function resolveChatModel(
         status: 503,
         type: 'mini_role_unavailable',
         message: `No configured model is currently available for the ${classification.role} role.`,
+        miniRole: classification.role,
+        attemptedSlots: mini.resolution.skipped.map((attempt) => attempt.slot),
       };
     }
-    const mode = await resolveMode(null);
+    const mode: HubMode = 'smart';
     return {
       ok: true,
       value: {
@@ -239,6 +257,9 @@ chatRouter.post('/completions', async (req, res, next) => {
     estimated: boolean;
     meta: boolean;
     requestedModel: string;
+    miniRole?: import('../keys/types.js').UsageEvent['miniRole'];
+    miniSlot?: import('../keys/types.js').UsageEvent['miniSlot'];
+    miniCatalogId?: string | null;
   }) => {
     if (billed) return;
     billed = true;
@@ -277,6 +298,9 @@ chatRouter.post('/completions', async (req, res, next) => {
       }),
       underlyingModels: underlying,
       providerId: args.providerId,
+      miniRole: args.miniRole ?? null,
+      miniSlot: args.miniSlot ?? null,
+      miniCatalogId: args.miniCatalogId ?? null,
       costMicrosUsd: usdToMicros(costUsd),
       promptTokens: args.usage.prompt_tokens ?? null,
       completionTokens: args.usage.completion_tokens ?? null,
@@ -297,7 +321,17 @@ chatRouter.post('/completions', async (req, res, next) => {
     const resolved = await resolveChatModel(body.model, body.thinking, body.messages);
     if (!resolved.ok) {
       res.status(resolved.status).json({
-        error: { message: resolved.message, type: resolved.type },
+        error: {
+          message: resolved.message,
+          type: resolved.type,
+          mini: resolved.miniRole
+            ? {
+                role: resolved.miniRole,
+                attemptedSlots: resolved.attemptedSlots ?? [],
+                requestId,
+              }
+            : undefined,
+        },
       });
       return;
     }
@@ -415,6 +449,9 @@ chatRouter.post('/completions', async (req, res, next) => {
         providerLabel
       );
       const usage = extractUsage(result.body, usageMessages);
+      const miniSelectedAttempt = ctx.mini
+        ? (result as Awaited<ReturnType<typeof routeMiniChat>>).selectedAttempt
+        : null;
       await recordAdminUsage({
         providerId: result.providerId,
         routedModel: result.model,
@@ -426,10 +463,29 @@ chatRouter.post('/completions', async (req, res, next) => {
         ),
         meta: ctx.meta,
         requestedModel: ctx.requestedModel,
+        miniRole: ctx.mini?.classification.role ?? null,
+        miniSlot: miniSelectedAttempt?.slot ?? null,
+        miniCatalogId: miniSelectedAttempt?.catalogId ?? null,
       });
 
       if (!result.ok) {
-        res.status(result.status >= 400 ? result.status : 502).json(result.body);
+        res.status(result.status >= 400 ? result.status : 502).json(
+          ctx.mini
+            ? {
+                error: {
+                  type: 'mini_role_unavailable',
+                  message: result.error ?? 'No configured Mini model completed the request.',
+                  mini: {
+                    role: ctx.mini.classification.role,
+                    attemptedSlots: result.attempts.map((attempt) =>
+                      'slot' in attempt ? attempt.slot : null
+                    ).filter((slot): slot is 'primary' | 'fallback' => slot !== null),
+                    requestId,
+                  },
+                },
+              }
+            : result.body
+        );
         return;
       }
 
@@ -438,13 +494,19 @@ chatRouter.post('/completions', async (req, res, next) => {
         const clone = structuredClone(outBody) as {
           choices?: Array<{ message?: { content?: unknown } }>;
           usage?: TokenUsage;
+          model?: string;
         };
         const content = clone.choices?.[0]?.message?.content;
         if (typeof content === 'string') {
           clone.choices![0]!.message!.content = guardOutputText(content).text;
         }
         if (!clone.usage) clone.usage = usage;
+        if (ctx.mini) clone.model = 'helmora-mini-1.0';
         outBody = clone;
+      }
+      if (ctx.mini && miniSelectedAttempt) {
+        res.setHeader('X-Helmora-Mini-Role', ctx.mini.classification.role);
+        res.setHeader('X-Helmora-Mini-Slot', miniSelectedAttempt.slot);
       }
       res.status(200).json(outBody);
       return;
@@ -489,8 +551,27 @@ chatRouter.post('/completions', async (req, res, next) => {
         estimated: true,
         meta: ctx.meta,
         requestedModel: ctx.requestedModel,
+        miniRole: ctx.mini?.classification.role ?? null,
+        miniSlot: null,
+        miniCatalogId: null,
       });
-      res.status(result.status >= 400 ? result.status : 502).json(result.body);
+      res.status(result.status >= 400 ? result.status : 502).json(
+        ctx.mini
+          ? {
+              error: {
+                type: 'mini_role_unavailable',
+                message: result.error ?? 'No configured Mini model completed the stream.',
+                mini: {
+                  role: ctx.mini.classification.role,
+                  attemptedSlots: result.attempts.map((attempt) =>
+                    'slot' in attempt ? attempt.slot : null
+                  ).filter((slot): slot is 'primary' | 'fallback' => slot !== null),
+                  requestId,
+                },
+              },
+            }
+          : result.body
+      );
       return;
     }
 
@@ -499,6 +580,13 @@ chatRouter.post('/completions', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
+    const miniSelectedAttempt = ctx.mini
+      ? (result as Awaited<ReturnType<typeof routeMiniChatStream>>).selectedAttempt
+      : null;
+    if (ctx.mini && miniSelectedAttempt) {
+      res.setHeader('X-Helmora-Mini-Role', ctx.mini.classification.role);
+      res.setHeader('X-Helmora-Mini-Slot', miniSelectedAttempt.slot);
+    }
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
     res.write(
@@ -513,7 +601,10 @@ chatRouter.post('/completions', async (req, res, next) => {
       for await (const chunk of result.stream.chunks) {
         if (ac.signal.aborted || res.writableEnded) break;
         const safe = redactStreamChunk(chunk);
-        res.write(`data: ${JSON.stringify(safe)}\n\n`);
+        const publicChunk = ctx.mini && safe && typeof safe === 'object'
+          ? { ...safe, model: 'helmora-mini-1.0' }
+          : safe;
+        res.write(`data: ${JSON.stringify(publicChunk)}\n\n`);
       }
       if (!res.writableEnded && !ac.signal.aborted) {
         res.write('data: [DONE]\n\n');
@@ -570,6 +661,9 @@ chatRouter.post('/completions', async (req, res, next) => {
       estimated: !hasReal,
       meta: ctx.meta,
       requestedModel: ctx.requestedModel,
+      miniRole: ctx.mini?.classification.role ?? null,
+      miniSlot: miniSelectedAttempt?.slot ?? null,
+      miniCatalogId: miniSelectedAttempt?.catalogId ?? null,
     });
 
     if (!res.writableEnded) res.end();

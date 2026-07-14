@@ -801,6 +801,9 @@ export class SupabaseConfigStore implements ConfigStore {
       model: event.model,
       underlyingModels,
       providerId: event.providerId ?? null,
+      miniRole: event.miniRole ?? null,
+      miniSlot: event.miniSlot ?? null,
+      miniCatalogId: event.miniCatalogId ?? null,
       costMicrosUsd: Math.round(Number(event.costMicrosUsd) || 0),
       promptTokens: event.promptTokens ?? null,
       completionTokens: event.completionTokens ?? null,
@@ -986,6 +989,13 @@ function normalizeUsageEvent(raw: unknown): UsageEvent {
       ? e.underlyingModels.map(String)
       : [],
     providerId: e.providerId == null ? null : String(e.providerId),
+    miniRole:
+      e.miniRole === 'general' || e.miniRole === 'reasoning' || e.miniRole === 'coding'
+      || e.miniRole === 'research' || e.miniRole === 'creative' || e.miniRole === 'review'
+        ? e.miniRole
+        : null,
+    miniSlot: e.miniSlot === 'primary' || e.miniSlot === 'fallback' ? e.miniSlot : null,
+    miniCatalogId: e.miniCatalogId == null ? null : String(e.miniCatalogId),
     costMicrosUsd: costMicros,
     promptTokens: e.promptTokens == null ? null : Number(e.promptTokens),
     completionTokens: e.completionTokens == null ? null : Number(e.completionTokens),

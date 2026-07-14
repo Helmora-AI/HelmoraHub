@@ -64,6 +64,9 @@ export type UsageEvent = {
   model: string;
   underlyingModels: string[];
   providerId: string | null;
+  miniRole: 'general' | 'reasoning' | 'coding' | 'research' | 'creative' | 'review' | null;
+  miniSlot: 'primary' | 'fallback' | null;
+  miniCatalogId: string | null;
   /** Integer micros of USD (1e-6). Source of truth for cost. */
   costMicrosUsd: number;
   promptTokens: number | null;

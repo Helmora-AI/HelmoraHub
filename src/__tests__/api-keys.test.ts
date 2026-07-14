@@ -8,6 +8,7 @@ import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
 import { costForModel, averageModelCosts, getPricingForModel } from '../pricing/cost.js';
 import type { Express } from 'express';
+import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 
 let app: Express;
 let tmpDir: string;
@@ -31,6 +32,16 @@ beforeAll(async () => {
   config.encryptionKey = 'test-encryption-key-api-keys';
   setActiveConfig(config);
   await initStorage(config);
+  const store = getConfigStore();
+  await store.updateProvider('paid-upstream', { enabled: true, verifyStatus: 'ok' });
+  const miniModel = await store.createHubModel({
+    providerId: 'paid-upstream',
+    modelId: 'demo/api-keys-mini',
+  });
+  await setMiniRoleConfig(normalizeMiniRoleConfig({
+    version: 2,
+    roles: { general: { primaryCatalogId: miniModel.id, fallbackCatalogId: null } },
+  }));
   app = createApp(config);
 
   const setup = await request(app)

@@ -12,6 +12,7 @@ import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
 import type { Express } from 'express';
+import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 
 describe('vision helpers', () => {
   it('merges images[] into last user message', () => {
@@ -54,8 +55,18 @@ describe('vision streaming API', () => {
     config.encryptionKey = 'test-encryption-key-vision';
     setActiveConfig(config);
     await initStorage(config);
+    const store = getConfigStore();
+    await store.updateProvider('paid-upstream', { enabled: true, verifyStatus: 'ok' });
+    const miniModel = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'demo/vision-mini',
+    });
+    await setMiniRoleConfig(normalizeMiniRoleConfig({
+      version: 2,
+      roles: { general: { primaryCatalogId: miniModel.id, fallbackCatalogId: null } },
+    }));
     app = createApp(config);
-    apiKey = await getConfigStore().getUnifiedApiKey();
+    apiKey = await store.getUnifiedApiKey();
   });
 
   afterAll(async () => {

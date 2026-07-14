@@ -112,6 +112,9 @@ type UsageRow = {
   model: string;
   underlying_models: string;
   provider_id: string | null;
+  mini_role: UsageEvent['miniRole'];
+  mini_slot: UsageEvent['miniSlot'];
+  mini_catalog_id: string | null;
   cost_micros_usd: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -202,6 +205,9 @@ export class SqliteConfigStore implements ConfigStore {
         model TEXT NOT NULL,
         underlying_models TEXT NOT NULL DEFAULT '[]',
         provider_id TEXT,
+        mini_role TEXT,
+        mini_slot TEXT,
+        mini_catalog_id TEXT,
         cost_micros_usd INTEGER NOT NULL DEFAULT 0,
         prompt_tokens INTEGER,
         completion_tokens INTEGER,
@@ -219,14 +225,23 @@ export class SqliteConfigStore implements ConfigStore {
   }
 
   private ensureUsageEventsSchema(): void {
-    const cols = (
+    const cols = new Set((
       this.db.prepare(`PRAGMA table_info(usage_events)`).all() as Array<{ name: string }>
-    ).map((c) => c.name);
+    ).map((c) => c.name));
+    const add = (name: string, ddl: string) => {
+      if (!cols.has(name)) {
+        this.db.exec(`ALTER TABLE usage_events ADD COLUMN ${ddl}`);
+        cols.add(name);
+      }
+    };
+    add('mini_role', 'mini_role TEXT');
+    add('mini_slot', 'mini_slot TEXT');
+    add('mini_catalog_id', 'mini_catalog_id TEXT');
     const needsRebuild =
-      !cols.includes('request_id') ||
-      !cols.includes('source') ||
-      !cols.includes('cost_micros_usd') ||
-      !cols.includes('status');
+      !cols.has('request_id') ||
+      !cols.has('source') ||
+      !cols.has('cost_micros_usd') ||
+      !cols.has('status');
 
     if (!needsRebuild) {
       this.db.exec(
@@ -246,6 +261,9 @@ export class SqliteConfigStore implements ConfigStore {
         model TEXT NOT NULL,
         underlying_models TEXT NOT NULL DEFAULT '[]',
         provider_id TEXT,
+        mini_role TEXT,
+        mini_slot TEXT,
+        mini_catalog_id TEXT,
         cost_micros_usd INTEGER NOT NULL DEFAULT 0,
         prompt_tokens INTEGER,
         completion_tokens INTEGER,
@@ -254,7 +272,7 @@ export class SqliteConfigStore implements ConfigStore {
       );
     `);
 
-    const hasOld = cols.includes('api_key_id') && cols.includes('cost_usd');
+    const hasOld = cols.has('api_key_id') && cols.has('cost_usd');
     if (hasOld) {
       const rows = this.db.prepare(`SELECT * FROM usage_events`).all() as Array<
         Record<string, unknown>
@@ -964,6 +982,9 @@ export class SqliteConfigStore implements ConfigStore {
       model: event.model,
       underlyingModels,
       providerId: event.providerId ?? null,
+      miniRole: event.miniRole ?? null,
+      miniSlot: event.miniSlot ?? null,
+      miniCatalogId: event.miniCatalogId ?? null,
       costMicrosUsd,
       promptTokens: event.promptTokens ?? null,
       completionTokens: event.completionTokens ?? null,
@@ -976,8 +997,9 @@ export class SqliteConfigStore implements ConfigStore {
         .prepare(
           `INSERT INTO usage_events
             (id, request_id, source, api_key_id, status, model, underlying_models,
-             provider_id, cost_micros_usd, prompt_tokens, completion_tokens, estimated, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             provider_id, mini_role, mini_slot, mini_catalog_id, cost_micros_usd,
+             prompt_tokens, completion_tokens, estimated, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           row.id,
@@ -988,6 +1010,9 @@ export class SqliteConfigStore implements ConfigStore {
           row.model,
           JSON.stringify(underlyingModels),
           row.providerId,
+          row.miniRole,
+          row.miniSlot,
+          row.miniCatalogId,
           row.costMicrosUsd,
           row.promptTokens,
           row.completionTokens,
@@ -1030,6 +1055,9 @@ export class SqliteConfigStore implements ConfigStore {
       model: row.model,
       underlyingModels,
       providerId: row.provider_id,
+      miniRole: row.mini_role ?? null,
+      miniSlot: row.mini_slot ?? null,
+      miniCatalogId: row.mini_catalog_id ?? null,
       costMicrosUsd: Number(row.cost_micros_usd) || 0,
       promptTokens: row.prompt_tokens,
       completionTokens: row.completion_tokens,

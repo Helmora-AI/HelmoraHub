@@ -129,12 +129,30 @@ describe('Mini exact runtime attempts', () => {
     const result = await routeMiniChat(
       { messages: [{ role: 'user', content: 'implement this' }] },
       attempts('retryable'),
-      { mode: 'smart' }
+      {
+        mode: 'smart',
+        identity: {
+          enabled: true,
+          surface: 'api',
+          requestedModelRef: 'auto',
+          meta: true,
+          displayName: 'Helmora Mini 1.0',
+        },
+      }
     );
 
     expect(result.ok).toBe(true);
     expect(result.selectedAttempt?.slot).toBe('fallback');
     expect(dispatch.chat).toHaveBeenCalledTimes(2);
+    for (const call of dispatch.chat.mock.calls) {
+      const request = call[1] as { messages: Array<{ role: string; content: unknown }> };
+      const identities = request.messages.filter(
+          (message) => message.role === 'system'
+          && typeof message.content === 'string'
+          && message.content.includes('Helmora Mini 1.0')
+      );
+      expect(identities).toHaveLength(1);
+    }
   });
 
   it('stops on a deterministic client failure', async () => {

@@ -101,7 +101,9 @@ describe('SSE streaming', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.choices[0].message.content).toContain('Helmora AI demo');
-    expect(res.body.model).toBe('demo/sse-mini');
+    expect(res.body.model).toBe('helmora-mini-1.0');
+    expect(res.headers['x-helmora-mini-role']).toBe('general');
+    expect(res.headers['x-helmora-mini-slot']).toBe('primary');
   });
 
   it('keeps auto as an alias for the canonical Mini route', async () => {
@@ -124,8 +126,8 @@ describe('SSE streaming', () => {
 
     expect(canonical.status).toBe(200);
     expect(alias.status).toBe(200);
-    expect(canonical.body.model).toBe('demo/sse-mini');
-    expect(alias.body.model).toBe('demo/sse-mini');
+    expect(canonical.body.model).toBe('helmora-mini-1.0');
+    expect(alias.body.model).toBe('helmora-mini-1.0');
   });
 
   it('sets SSE headers used by proxies / coding clients', async () => {
@@ -141,5 +143,8 @@ describe('SSE streaming', () => {
     expect(String(res.headers['cache-control'] || '')).toMatch(/no-cache/i);
     expect(String(res.headers['x-accel-buffering'] || '')).toBe('no');
     expect(res.headers['x-ctrl-mode']).toBeTruthy();
+    const exposed = String(res.headers['access-control-expose-headers'] || '').toLowerCase();
+    expect(exposed).toContain('x-helmora-mini-role');
+    expect(exposed).toContain('x-helmora-mini-slot');
   });
 });

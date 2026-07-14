@@ -4,10 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import request from './test-request.js';
 import { loadConfig } from '../lib/config.js';
-import { initStorage, closeStorage } from '../storage/index.js';
+import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { getUnifiedApiKey, setActiveMode } from '../db/index.js';
 import { createApp } from '../app.js';
 import type { Express } from 'express';
+import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 
 let app: Express;
 let apiKey: string;
@@ -38,6 +39,16 @@ beforeAll(async () => {
 
   await initStorage(config);
   await setActiveMode('smart');
+  const store = getConfigStore();
+  await store.updateProvider('paid-upstream', { enabled: true, verifyStatus: 'ok' });
+  const miniModel = await store.createHubModel({
+    providerId: 'paid-upstream',
+    modelId: 'demo/phase1-mini',
+  });
+  await setMiniRoleConfig(normalizeMiniRoleConfig({
+    version: 2,
+    roles: { general: { primaryCatalogId: miniModel.id, fallbackCatalogId: null } },
+  }));
   apiKey = await getUnifiedApiKey();
   app = createApp(config);
 

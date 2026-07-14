@@ -136,7 +136,9 @@ describe('POST /api/chat/completions', () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.choices?.[0]?.message?.content).toBeTruthy();
-    expect(res.body.model).toBe('demo/chat-test');
+    expect(res.body.model).toBe('helmora-mini-1.0');
+    expect(res.headers['x-helmora-mini-role']).toBe('general');
+    expect(res.headers['x-helmora-mini-slot']).toBe('primary');
   });
 
   it('classifies coding prompts and dispatches the coding catalog model', async () => {
@@ -150,7 +152,9 @@ describe('POST /api/chat/completions', () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.model).toBe('demo/chat-coding');
+    expect(res.body.model).toBe('helmora-mini-1.0');
+    expect(res.headers['x-helmora-mini-role']).toBe('coding');
+    expect(res.headers['x-helmora-mini-slot']).toBe('primary');
   });
 
   it('resolves catalog model ref', async () => {
@@ -189,11 +193,15 @@ describe('POST /api/chat/completions', () => {
       });
 
     const events = await getConfigStore().listUsage({ limit: 20 });
-    const admin = events.find((e) => e.source === 'admin_chat');
+    const admin = events.find(
+      (e) => e.source === 'admin_chat' && e.miniRole === 'general'
+    );
     expect(admin).toBeTruthy();
     expect(admin!.apiKeyId).toBeNull();
     expect(admin!.requestId).toMatch(/^req_/);
     expect(typeof admin!.costMicrosUsd).toBe('number');
+    expect(admin!.miniSlot).toBe('primary');
+    expect(admin!.miniCatalogId).toBe(catalogId);
   });
 
   it('records catalog usage under upstream model id', async () => {
