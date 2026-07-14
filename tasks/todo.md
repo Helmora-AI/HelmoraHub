@@ -16,7 +16,7 @@
 
 - [x] Task 6: `/tools` route, API types, and draft helpers
 - [ ] Task 7: `/tools` configuration page and activity shell (implemented; browser smoke pending)
-- [ ] Task 8: TinyFish Search connector
+- [x] Task 8: TinyFish Search connector
 - [ ] Task 9: TinyFish Fetch target validation
 - [ ] Task 10: Bounded limiter, cache, retries, and tool audit
 - [ ] Task 10A: Connector test, health, and activity API

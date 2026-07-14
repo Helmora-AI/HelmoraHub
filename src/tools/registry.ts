@@ -29,7 +29,7 @@ export const REGISTERED_TOOLS: readonly RegisteredTool[] = deepFreeze([
         query: { type: 'string', minLength: 1, maxLength: 2_000 },
         location: { type: 'string', minLength: 1, maxLength: 200 },
         language: { type: 'string', minLength: 2, maxLength: 35 },
-        page: { type: 'integer', minimum: 1, maximum: 10 },
+        page: { type: 'integer', minimum: 0, maximum: 10 },
         recencyMinutes: { type: 'integer', minimum: 1 },
         afterDate: { type: 'string', format: 'date' },
         beforeDate: { type: 'string', format: 'date' },

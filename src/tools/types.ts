@@ -54,3 +54,16 @@ export type ConnectorCredentialMetadata = {
   credentialConfigured: boolean;
   credentialHint: string | null;
 };
+
+export type ToolSource = {
+  title: string | null;
+  url: string;
+  snippet: string | null;
+};
+
+export type NormalizedToolResult = {
+  content: string;
+  structuredContent?: Record<string, unknown>;
+  sources: ToolSource[];
+  truncated: boolean;
+};
