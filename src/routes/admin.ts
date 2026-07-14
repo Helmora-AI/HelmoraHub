@@ -16,10 +16,14 @@ import { HUB_MODES, MODE_PROFILES } from '../types.js';
 import type { HubMode } from '../types.js';
 import { buildFallbackChain } from '../services/mode-router.js';
 import {
-  getMiniRouteConfig,
-  setMiniRouteConfig,
-  resolveMiniRouteChain,
-  type MiniRouteCandidate,
+  getMiniRoleConfigProjection,
+  MINI_ROLE_METADATA,
+  normalizeMiniRoleConfig,
+  resolveMiniRoleAdminState,
+  setMiniRoleConfig,
+  validateMiniRoleConfigReferences,
+  type MiniMigrationWarning,
+  type MiniRoleConfig,
 } from '../services/mini-route.js';
 import { maskSecret } from '../lib/crypto.js';
 import {
@@ -37,6 +41,46 @@ import {
 import { HubModelMutationError } from '../models/types.js';
 
 export const adminRouter = Router();
+
+const miniRoleAssignmentSchema = z.object({
+  primaryCatalogId: z.string().trim().min(1).nullable(),
+  fallbackCatalogId: z.string().trim().min(1).nullable(),
+}).strict();
+
+const miniRoleConfigSchema = z.object({
+  version: z.literal(2),
+  enabled: z.boolean(),
+  roles: z.object({
+    general: miniRoleAssignmentSchema,
+    reasoning: miniRoleAssignmentSchema,
+    coding: miniRoleAssignmentSchema,
+    research: miniRoleAssignmentSchema,
+    creative: miniRoleAssignmentSchema,
+    review: miniRoleAssignmentSchema,
+  }).strict(),
+}).strict();
+
+async function miniRouteAdminResponse(
+  config: MiniRoleConfig,
+  migrationWarnings: MiniMigrationWarning[] = []
+) {
+  const [providers, catalog] = await Promise.all([
+    listProviders(),
+    getStorage().config.listHubModels({ limit: 500 }),
+  ]);
+  return {
+    modelId: 'helmora-mini-1.0',
+    displayName: 'Helmora Mini 1.0',
+    config,
+    resolved: {
+      roles: resolveMiniRoleAdminState(config, catalog.models, providers),
+    },
+    classifier: {
+      roles: MINI_ROLE_METADATA,
+    },
+    migrationWarnings,
+  };
+}
 
 function mutationStatus(err: HubModelMutationError): number {
   switch (err.code) {
@@ -745,18 +789,8 @@ adminRouter.get('/agents', async (_req, res, next) => {
 
 adminRouter.get('/mini-route', async (_req, res, next) => {
   try {
-    const config = await getMiniRouteConfig();
-    const resolved = await resolveMiniRouteChain(config);
-    res.json({
-      modelId: 'helmora-mini-1.0',
-      displayName: 'Helmora Mini 1.0',
-      config,
-      resolved: {
-        mode: resolved.mode,
-        providerIds: resolved.chain.map((p) => p.id),
-        modelByProvider: resolved.modelByProvider,
-      },
-    });
+    const projection = await getMiniRoleConfigProjection();
+    res.json(await miniRouteAdminResponse(projection.config, projection.warnings));
   } catch (err) {
     next(err);
   }
@@ -764,39 +798,41 @@ adminRouter.get('/mini-route', async (_req, res, next) => {
 
 adminRouter.put('/mini-route', async (req, res, next) => {
   try {
-    const schema = z.object({
-      enabled: z.boolean().optional(),
-      mode: z.enum(HUB_MODES as [HubMode, ...HubMode[]]).optional(),
-      fallbackToModeChain: z.boolean().optional(),
-      candidates: z
-        .array(
-          z.object({
-            providerId: z.string().min(1),
-            modelId: z.string().min(1).nullable().optional(),
-          })
-        )
-        .optional(),
-    });
-    const parsed = schema.safeParse(req.body);
+    const parsed = miniRoleConfigSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: { message: parsed.error.message, type: 'validation_error' } });
+      res.status(400).json({
+        error: {
+          message: 'Mini role configuration is invalid.',
+          type: 'validation_error',
+          fields: parsed.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            code: 'invalid_value',
+            message: issue.message,
+          })),
+        },
+      });
       return;
     }
-    const config = await setMiniRouteConfig({
-      ...parsed.data,
-      candidates: parsed.data.candidates as MiniRouteCandidate[] | undefined,
-    });
-    const resolved = await resolveMiniRouteChain(config);
-    res.json({
-      modelId: 'helmora-mini-1.0',
-      displayName: 'Helmora Mini 1.0',
-      config,
-      resolved: {
-        mode: resolved.mode,
-        providerIds: resolved.chain.map((p) => p.id),
-        modelByProvider: resolved.modelByProvider,
-      },
-    });
+
+    const config = normalizeMiniRoleConfig(parsed.data);
+    const [providers, catalog] = await Promise.all([
+      listProviders(),
+      getStorage().config.listHubModels({ limit: 500 }),
+    ]);
+    const fields = validateMiniRoleConfigReferences(config, catalog.models, providers);
+    if (fields.length > 0) {
+      res.status(400).json({
+        error: {
+          message: 'Mini role configuration contains invalid catalog references.',
+          type: 'validation_error',
+          fields,
+        },
+      });
+      return;
+    }
+
+    await setMiniRoleConfig(config);
+    res.json(await miniRouteAdminResponse(config));
   } catch (err) {
     next(err);
   }

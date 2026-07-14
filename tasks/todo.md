@@ -4,8 +4,8 @@
 
 - [x] Task 1: Add deterministic bilingual classifier with explicit continuation inputs and tests.
 - [x] Task 2: Add version 2 role config, legacy migration, and slot-wise inheritance.
-- [ ] Task 3: Update Admin Mini GET/PUT contract and validation.
-- [ ] Checkpoint: focused tests and Hub typecheck pass.
+- [x] Task 3: Update Admin Mini GET/PUT contract and validation.
+- [x] Checkpoint: focused tests and Hub typecheck pass.
 
 ## Runtime
 

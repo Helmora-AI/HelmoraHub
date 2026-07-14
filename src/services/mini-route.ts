@@ -38,6 +38,75 @@ export type EffectiveMiniRoleSlot = {
   inheritedFromGeneral: boolean;
 };
 
+export type MiniConfigFieldIssue = {
+  path: string;
+  code:
+    | 'duplicate_role_model'
+    | 'catalog_model_not_found'
+    | 'provider_not_found'
+    | 'unsupported_protocol';
+  message: string;
+};
+
+export type MiniRouteWarning = {
+  path: string;
+  code:
+    | 'catalog_model_missing'
+    | 'provider_missing'
+    | 'model_disabled'
+    | 'provider_disabled'
+    | 'provider_degraded'
+    | 'protocol_not_ready';
+  message: string;
+};
+
+export type MiniResolvedCatalogModel = {
+  catalogId: string;
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  displayName: string;
+  enabled: boolean;
+  routable: boolean;
+  status: 'ready' | 'degraded' | 'disabled' | 'credentials_required';
+  protocol: string;
+};
+
+export type MiniResolvedRoleSlot = {
+  catalogId: string;
+  inheritedFromGeneral: boolean;
+  model: MiniResolvedCatalogModel | null;
+};
+
+export type MiniResolvedRoleState = {
+  primary: MiniResolvedRoleSlot | null;
+  fallback: MiniResolvedRoleSlot | null;
+  warnings: MiniRouteWarning[];
+};
+
+export type MiniResolvedRoles = Record<MiniRole, MiniResolvedRoleState>;
+
+export const MINI_ROLE_METADATA: ReadonlyArray<{
+  id: MiniRole;
+  description: string;
+}> = [
+  { id: 'general', description: 'General conversation and uncategorized requests.' },
+  { id: 'reasoning', description: 'Deep analysis, mathematics, and multi-step reasoning.' },
+  { id: 'coding', description: 'Code generation, debugging, and technical implementation.' },
+  { id: 'research', description: 'Source-oriented research and evidence synthesis.' },
+  { id: 'creative', description: 'Brainstorming, naming, and creative writing.' },
+  { id: 'review', description: 'Critique, audit, correctness, and security review.' },
+];
+
+const SUPPORTED_MINI_PROTOCOLS = new Set([
+  'openai',
+  'keyless',
+  'custom',
+  'anthropic',
+  'gemini',
+  'oauth',
+]);
+
 function emptyRoleAssignments(): Record<MiniRole, MiniRoleAssignment> {
   return {
     general: { primaryCatalogId: null, fallbackCatalogId: null },
@@ -207,6 +276,171 @@ export function resolveEffectiveMiniRoleSlots(
     seen.add(item.catalogId);
     return true;
   });
+}
+
+export function validateMiniRoleConfigReferences(
+  config: MiniRoleConfig,
+  catalog: readonly StoredHubModel[],
+  providers: readonly ProviderToggle[]
+): MiniConfigFieldIssue[] {
+  const issues: MiniConfigFieldIssue[] = [];
+  const catalogById = new Map(catalog.map((model) => [model.id, model]));
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+
+  for (const role of MINI_ROLES) {
+    const assignment = config.roles[role];
+    if (
+      assignment.primaryCatalogId
+      && assignment.primaryCatalogId === assignment.fallbackCatalogId
+    ) {
+      issues.push({
+        path: `roles.${role}.fallbackCatalogId`,
+        code: 'duplicate_role_model',
+        message: 'Primary and fallback must use different catalog models.',
+      });
+    }
+
+    for (const slot of ['primaryCatalogId', 'fallbackCatalogId'] as const) {
+      const catalogId = assignment[slot];
+      if (!catalogId) continue;
+      const path = `roles.${role}.${slot}`;
+      const model = catalogById.get(catalogId);
+      if (!model) {
+        issues.push({
+          path,
+          code: 'catalog_model_not_found',
+          message: `Catalog model ${catalogId} does not exist.`,
+        });
+        continue;
+      }
+      const provider = providersById.get(model.providerId);
+      if (!provider) {
+        issues.push({
+          path,
+          code: 'provider_not_found',
+          message: `Provider ${model.providerId} for ${catalogId} does not exist.`,
+        });
+        continue;
+      }
+      if (!SUPPORTED_MINI_PROTOCOLS.has(provider.protocol)) {
+        issues.push({
+          path,
+          code: 'unsupported_protocol',
+          message: `Provider protocol ${provider.protocol} cannot serve chat requests.`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+function providerNeedsCredentials(provider: ProviderToggle): boolean {
+  if (provider.authStyle === 'none' || provider.protocol === 'keyless') return false;
+  if (provider.authMode === 'oauth') return provider.oauthState !== 'connected';
+  return !provider.apiKey;
+}
+
+export function resolveMiniRoleAdminState(
+  config: MiniRoleConfig,
+  catalog: readonly StoredHubModel[],
+  providers: readonly ProviderToggle[]
+): MiniResolvedRoles {
+  const catalogById = new Map(catalog.map((model) => [model.id, model]));
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  const result = {} as MiniResolvedRoles;
+
+  for (const role of MINI_ROLES) {
+    const state: MiniResolvedRoleState = { primary: null, fallback: null, warnings: [] };
+    for (const effective of resolveEffectiveMiniRoleSlots(config, role)) {
+      const path = `roles.${role}.${effective.slot}CatalogId`;
+      const model = catalogById.get(effective.catalogId);
+      if (!model) {
+        state[effective.slot] = {
+          catalogId: effective.catalogId,
+          inheritedFromGeneral: effective.inheritedFromGeneral,
+          model: null,
+        };
+        state.warnings.push({
+          path,
+          code: 'catalog_model_missing',
+          message: `Catalog model ${effective.catalogId} no longer exists.`,
+        });
+        continue;
+      }
+
+      const provider = providersById.get(model.providerId);
+      if (!provider) {
+        state[effective.slot] = {
+          catalogId: effective.catalogId,
+          inheritedFromGeneral: effective.inheritedFromGeneral,
+          model: null,
+        };
+        state.warnings.push({
+          path,
+          code: 'provider_missing',
+          message: `Provider ${model.providerId} no longer exists.`,
+        });
+        continue;
+      }
+
+      const needsCredentials = providerNeedsCredentials(provider);
+      const protocolReady = SUPPORTED_MINI_PROTOCOLS.has(provider.protocol)
+        && provider.catalogReady;
+      const routable = Boolean(
+        model.enabled
+        && provider.enabled
+        && provider.verifyStatus === 'ok'
+        && protocolReady
+        && !needsCredentials
+      );
+      let status: MiniResolvedCatalogModel['status'] = 'ready';
+      if (!model.enabled || !provider.enabled) status = 'disabled';
+      else if (needsCredentials) status = 'credentials_required';
+      else if (!routable) status = 'degraded';
+
+      state[effective.slot] = {
+        catalogId: effective.catalogId,
+        inheritedFromGeneral: effective.inheritedFromGeneral,
+        model: {
+          catalogId: model.id,
+          providerId: model.providerId,
+          providerLabel: provider.label,
+          modelId: model.modelId,
+          displayName: model.displayName,
+          enabled: model.enabled,
+          routable,
+          status,
+          protocol: provider.protocol,
+        },
+      };
+
+      if (!model.enabled) {
+        state.warnings.push({ path, code: 'model_disabled', message: `${model.displayName} is disabled.` });
+      }
+      if (!provider.enabled) {
+        state.warnings.push({ path, code: 'provider_disabled', message: `${provider.label} is disabled.` });
+      }
+      if (!protocolReady) {
+        state.warnings.push({
+          path,
+          code: 'protocol_not_ready',
+          message: `${provider.label} does not currently have a ready chat adapter.`,
+        });
+      } else if (provider.verifyStatus !== 'ok' || needsCredentials) {
+        state.warnings.push({
+          path,
+          code: 'provider_degraded',
+          message: needsCredentials
+            ? `${provider.label} requires credentials.`
+            : `${provider.label} is not currently verified as healthy.`,
+        });
+      }
+    }
+    result[role] = state;
+  }
+
+  return result;
 }
 
 export type MiniRouteCandidate = {

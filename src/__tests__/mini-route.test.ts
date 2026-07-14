@@ -5,6 +5,7 @@ import path from 'node:path';
 import request from './test-request.js';
 import { loadConfig } from '../lib/config.js';
 import { initStorage, closeStorage } from '../storage/index.js';
+import { getConfigStore } from '../storage/index.js';
 import { getSetting, getUnifiedApiKey, setSetting, updateProvider } from '../db/index.js';
 import { createApp } from '../app.js';
 import {
@@ -60,6 +61,15 @@ afterAll(async () => {
 });
 
 describe('mini-route config', () => {
+  const emptyRoles = () => ({
+    general: { primaryCatalogId: null, fallbackCatalogId: null },
+    reasoning: { primaryCatalogId: null, fallbackCatalogId: null },
+    coding: { primaryCatalogId: null, fallbackCatalogId: null },
+    research: { primaryCatalogId: null, fallbackCatalogId: null },
+    creative: { primaryCatalogId: null, fallbackCatalogId: null },
+    review: { primaryCatalogId: null, fallbackCatalogId: null },
+  });
+
   const catalogModel = (
     id: string,
     providerId: string,
@@ -240,32 +250,99 @@ describe('mini-route config', () => {
     expect(resolved.chain.length).toBeGreaterThan(0);
   });
 
-  it('GET/PUT /api/mini-route persists candidates', async () => {
+  it('GET/PUT /api/mini-route persists the complete v2 role contract', async () => {
     await updateProvider('paid-upstream', { enabled: true });
+    const store = getConfigStore();
+    const primary = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'mini-general-primary',
+    });
+    const fallback = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'mini-general-fallback',
+    });
+    const roles = emptyRoles();
+    roles.general = {
+      primaryCatalogId: primary.id,
+      fallbackCatalogId: fallback.id,
+    };
 
     const put = await request(app)
       .put('/api/mini-route')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
+        version: 2,
         enabled: true,
-        mode: 'economy',
-        fallbackToModeChain: true,
-        candidates: [{ providerId: 'paid-upstream', modelId: 'demo/paid' }],
+        roles,
       });
     expect(put.status).toBe(200);
-    expect(put.body.config.mode).toBe('economy');
-    expect(put.body.config.candidates).toEqual([
-      { providerId: 'paid-upstream', modelId: 'demo/paid' },
+    expect(put.body.config.version).toBe(2);
+    expect(put.body.config.roles.general).toEqual(roles.general);
+    expect(put.body.resolved.roles.coding.primary).toMatchObject({
+      catalogId: primary.id,
+      inheritedFromGeneral: true,
+      model: { providerId: 'paid-upstream', modelId: 'mini-general-primary' },
+    });
+    expect(put.body.classifier.roles.map((role: { id: string }) => role.id)).toEqual([
+      'general',
+      'reasoning',
+      'coding',
+      'research',
+      'creative',
+      'review',
     ]);
-    expect(put.body.resolved.providerIds[0]).toBe('paid-upstream');
-    expect(put.body.resolved.modelByProvider['paid-upstream']).toBe('demo/paid');
     expect(put.body.displayName).toBe('Helmora Mini 1.0');
 
     const get = await request(app)
       .get('/api/mini-route')
       .set('Authorization', `Bearer ${adminToken}`);
     expect(get.status).toBe(200);
-    expect(get.body.config.candidates[0].providerId).toBe('paid-upstream');
+    expect(get.body.config.roles.general.primaryCatalogId).toBe(primary.id);
+  });
+
+  it('PUT returns field-addressable errors for missing and duplicate catalog ids', async () => {
+    const roles = emptyRoles();
+    roles.general = {
+      primaryCatalogId: 'mdl_missing',
+      fallbackCatalogId: 'mdl_missing',
+    };
+
+    const put = await request(app)
+      .put('/api/mini-route')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ version: 2, enabled: true, roles });
+
+    expect(put.status).toBe(400);
+    expect(put.body.error.type).toBe('validation_error');
+    expect(put.body.error.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'roles.general.fallbackCatalogId', code: 'duplicate_role_model' }),
+      expect.objectContaining({ path: 'roles.general.primaryCatalogId', code: 'catalog_model_not_found' }),
+    ]));
+  });
+
+  it('PUT accepts temporarily unavailable providers and returns warnings', async () => {
+    const store = getConfigStore();
+    const model = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'mini-temporarily-disabled',
+    });
+    await updateProvider('paid-upstream', { enabled: false });
+    const roles = emptyRoles();
+    roles.general.primaryCatalogId = model.id;
+
+    const put = await request(app)
+      .put('/api/mini-route')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ version: 2, enabled: true, roles });
+
+    expect(put.status).toBe(200);
+    expect(put.body.config.roles.general.primaryCatalogId).toBe(model.id);
+    expect(put.body.resolved.roles.general.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: 'roles.general.primaryCatalogId',
+        code: 'provider_disabled',
+      }),
+    ]));
   });
 
   it('orders enabled candidates first then mode fallback', async () => {
