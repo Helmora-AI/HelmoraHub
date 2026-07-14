@@ -28,6 +28,62 @@ export interface RouteChatIdentityOptions {
   displayName?: string | null;
 }
 
+export type CrossModelRetryReason =
+  | 'network'
+  | 'rate_limited'
+  | 'upstream_unavailable'
+  | 'invalid_credentials'
+  | 'model_missing'
+  | 'request_invalid'
+  | 'context_limit'
+  | 'unsupported_request';
+
+export type CrossModelRetryDecision = {
+  retryable: boolean;
+  reason: CrossModelRetryReason;
+  healthEffect: 'none' | 'degraded' | 'invalid_credentials';
+};
+
+export function normalizeCrossModelRetry(input: {
+  status: number;
+  error?: string;
+  body?: unknown;
+}): CrossModelRetryDecision {
+  const detail = `${input.error ?? ''} ${
+    typeof input.body === 'string' ? input.body : JSON.stringify(input.body ?? '')
+  }`.toLowerCase();
+
+  if (/context.{0,20}(?:length|limit|window)|maximum context|too many tokens/.test(detail)) {
+    return { retryable: false, reason: 'context_limit', healthEffect: 'none' };
+  }
+  if (input.status === 422 || /unsupported (?:option|parameter|request)/.test(detail)) {
+    return { retryable: false, reason: 'unsupported_request', healthEffect: 'none' };
+  }
+  if (input.status === 401 || input.status === 403) {
+    return {
+      retryable: true,
+      reason: 'invalid_credentials',
+      healthEffect: 'invalid_credentials',
+    };
+  }
+  if (input.status === 404) {
+    return { retryable: true, reason: 'model_missing', healthEffect: 'degraded' };
+  }
+  if (input.status === 429) {
+    return { retryable: true, reason: 'rate_limited', healthEffect: 'degraded' };
+  }
+  if (
+    input.status === 0
+    || /network|fetch failed|timeout|timed out|econn|socket|dns/.test(detail)
+  ) {
+    return { retryable: true, reason: 'network', healthEffect: 'degraded' };
+  }
+  if (input.status >= 500) {
+    return { retryable: true, reason: 'upstream_unavailable', healthEffect: 'degraded' };
+  }
+  return { retryable: false, reason: 'request_invalid', healthEffect: 'none' };
+}
+
 export interface RouteChatOptions {
   mode: HubMode;
   role?: string | null;

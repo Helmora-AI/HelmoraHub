@@ -16,11 +16,13 @@ import {
   normalizeMiniRoleConfig,
   projectLegacyMiniRouteConfig,
   resolveMiniRouteChain,
+  resolveMiniCatalogAttempts,
   resolveEffectiveMiniRoleSlots,
   setMiniRouteConfig,
   setMiniRoleConfig,
 } from '../services/mini-route.js';
 import type { StoredHubModel } from '../models/types.js';
+import type { ProviderToggle } from '../types.js';
 import type { Express } from 'express';
 
 let app: Express;
@@ -92,6 +94,35 @@ describe('mini-route config', () => {
     capabilities: null,
     createdAt: 1,
     updatedAt: 1,
+  });
+
+  const providerToggle = (
+    id: string,
+    overrides: Partial<ProviderToggle> = {}
+  ): ProviderToggle => ({
+    id,
+    label: id,
+    enabled: true,
+    tier: 2,
+    baseUrl: 'https://example.test/v1',
+    apiKey: 'test-key',
+    defaultModel: null,
+    allowedModes: ['smart'],
+    capabilities: ['streaming'],
+    protocol: 'openai',
+    authStyle: 'bearer',
+    benchmarkModel: null,
+    pinnedModels: [],
+    verifyStatus: 'ok',
+    verifyError: null,
+    verifiedAt: 1,
+    source: 'test',
+    catalogReady: true,
+    extraHeaders: null,
+    timeoutMs: null,
+    authMode: 'api_key',
+    oauthState: 'none',
+    ...overrides,
   });
 
   it('normalizes version 2 role assignments for every fixed role', () => {
@@ -221,6 +252,72 @@ describe('mini-route config', () => {
       { slot: 'primary', catalogId: 'mdl-general-fallback', inheritedFromGeneral: false },
     ]);
     expect(resolveEffectiveMiniRoleSlots(config, 'general')).toHaveLength(2);
+  });
+
+  it('resolves a role to exact catalog attempts and never appends a mode chain', () => {
+    const primary = catalogModel('mdl-code', 'provider-code', 'code-model');
+    const fallback = catalogModel('mdl-general-fallback', 'provider-backup', 'backup-model');
+    const config = normalizeMiniRoleConfig({
+      version: 2,
+      roles: {
+        general: { primaryCatalogId: null, fallbackCatalogId: fallback.id },
+        coding: { primaryCatalogId: primary.id, fallbackCatalogId: null },
+      },
+    });
+
+    const resolved = resolveMiniCatalogAttempts(
+      config,
+      'coding',
+      [primary, fallback],
+      [providerToggle('provider-code'), providerToggle('provider-backup')]
+    );
+
+    expect(resolved.configured).toBe(true);
+    expect(resolved.attempts.map((attempt) => ({
+      role: attempt.role,
+      slot: attempt.slot,
+      catalogId: attempt.catalogId,
+      providerId: attempt.provider.id,
+      modelId: attempt.modelId,
+    }))).toEqual([
+      {
+        role: 'coding',
+        slot: 'primary',
+        catalogId: 'mdl-code',
+        providerId: 'provider-code',
+        modelId: 'code-model',
+      },
+      {
+        role: 'coding',
+        slot: 'fallback',
+        catalogId: 'mdl-general-fallback',
+        providerId: 'provider-backup',
+        modelId: 'backup-model',
+      },
+    ]);
+  });
+
+  it('skips unroutable catalog attempts while preserving configured state', () => {
+    const primary = { ...catalogModel('mdl-off', 'provider-off', 'off-model'), enabled: false };
+    const fallback = catalogModel('mdl-ready', 'provider-ready', 'ready-model');
+    const config = normalizeMiniRoleConfig({
+      roles: {
+        general: { primaryCatalogId: primary.id, fallbackCatalogId: fallback.id },
+      },
+    });
+
+    const resolved = resolveMiniCatalogAttempts(
+      config,
+      'general',
+      [primary, fallback],
+      [providerToggle('provider-off'), providerToggle('provider-ready')]
+    );
+
+    expect(resolved.configured).toBe(true);
+    expect(resolved.attempts.map((attempt) => attempt.catalogId)).toEqual(['mdl-ready']);
+    expect(resolved.skipped).toEqual([
+      expect.objectContaining({ slot: 'primary', catalogId: 'mdl-off', reason: 'model_disabled' }),
+    ]);
   });
 
   it('normalizes defaults and dedupes candidates', () => {

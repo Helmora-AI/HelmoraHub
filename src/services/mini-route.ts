@@ -92,6 +92,35 @@ export type MiniCatalogReference = {
   slot: 'primary' | 'fallback';
 };
 
+export type MiniCatalogAttempt = {
+  role: MiniRole;
+  slot: 'primary' | 'fallback';
+  catalogId: string;
+  provider: ProviderToggle;
+  modelId: string;
+  inheritedFromGeneral: boolean;
+};
+
+export type MiniSkippedCatalogAttempt = {
+  slot: 'primary' | 'fallback';
+  catalogId: string;
+  reason:
+    | 'catalog_missing'
+    | 'provider_missing'
+    | 'model_disabled'
+    | 'provider_disabled'
+    | 'provider_degraded'
+    | 'credentials_required'
+    | 'protocol_not_ready';
+};
+
+export type MiniCatalogAttemptResolution = {
+  role: MiniRole;
+  configured: boolean;
+  attempts: MiniCatalogAttempt[];
+  skipped: MiniSkippedCatalogAttempt[];
+};
+
 export const MINI_ROLE_METADATA: ReadonlyArray<{
   id: MiniRole;
   description: string;
@@ -301,6 +330,68 @@ export function resolveEffectiveMiniRoleSlots(
     seen.add(item.catalogId);
     return true;
   });
+}
+
+export function resolveMiniCatalogAttempts(
+  config: MiniRoleConfig,
+  role: MiniRole,
+  catalog: readonly StoredHubModel[],
+  providers: readonly ProviderToggle[]
+): MiniCatalogAttemptResolution {
+  const effectiveSlots = resolveEffectiveMiniRoleSlots(config, role);
+  const catalogById = new Map(catalog.map((model) => [model.id, model]));
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  const attempts: MiniCatalogAttempt[] = [];
+  const skipped: MiniSkippedCatalogAttempt[] = [];
+
+  for (const effective of effectiveSlots) {
+    const model = catalogById.get(effective.catalogId);
+    if (!model) {
+      skipped.push({ ...effective, reason: 'catalog_missing' });
+      continue;
+    }
+    const provider = providersById.get(model.providerId);
+    if (!provider) {
+      skipped.push({ ...effective, reason: 'provider_missing' });
+      continue;
+    }
+    if (!model.enabled) {
+      skipped.push({ ...effective, reason: 'model_disabled' });
+      continue;
+    }
+    if (!provider.enabled) {
+      skipped.push({ ...effective, reason: 'provider_disabled' });
+      continue;
+    }
+    if (!SUPPORTED_MINI_PROTOCOLS.has(provider.protocol) || !provider.catalogReady) {
+      skipped.push({ ...effective, reason: 'protocol_not_ready' });
+      continue;
+    }
+    if (providerNeedsCredentials(provider)) {
+      skipped.push({ ...effective, reason: 'credentials_required' });
+      continue;
+    }
+    if (provider.verifyStatus !== 'ok') {
+      skipped.push({ ...effective, reason: 'provider_degraded' });
+      continue;
+    }
+
+    attempts.push({
+      role,
+      slot: effective.slot,
+      catalogId: effective.catalogId,
+      provider,
+      modelId: model.modelId,
+      inheritedFromGeneral: effective.inheritedFromGeneral,
+    });
+  }
+
+  return {
+    role,
+    configured: effectiveSlots.length > 0,
+    attempts,
+    skipped,
+  };
 }
 
 export function validateMiniRoleConfigReferences(
