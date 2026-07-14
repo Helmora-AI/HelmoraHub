@@ -246,14 +246,14 @@ Canonical bounded tool loop
 **Description:** Implement 1–10 URL Fetch with canonical URL validation, DNS/IP policy, available redirect-metadata revalidation, query redaction, fragment stripping, and bounded Markdown/JSON normalization. TinyFish performs the actual network fetch, so Hub does not claim socket-level DNS pinning.
 
 **Acceptance criteria:**
-- [ ] Local/private/link-local/metadata targets, alternate IP forms, credentials, non-HTTPS, non-default ports, and unsafe punycode are rejected.
-- [ ] Hub resolves and inspects every current DNS record before sending the URL, rejecting when any address violates policy.
-- [ ] Redirect URLs reported by TinyFish are revalidated when metadata is available; TinyFish validation remains defense in depth rather than Helmora's sole boundary.
-- [ ] Activity never exposes sensitive query strings and signed URLs are marked non-cacheable.
+- [x] Local/private/link-local/metadata targets, alternate IP forms, credentials, non-HTTPS, non-default ports, and unsafe punycode are rejected.
+- [x] Hub resolves and inspects every current DNS record before sending the URL, rejecting when any address violates policy.
+- [x] Redirect URLs reported by TinyFish are revalidated when metadata is available; TinyFish validation remains defense in depth rather than Helmora's sole boundary.
+- [x] Activity never exposes sensitive query strings and signed URLs are marked non-cacheable.
 
 **Verification:**
-- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tinyfish-fetch.test.ts`
-- [ ] `npm.cmd run typecheck`
+- [x] RED then GREEN: `npm.cmd test -- src/__tests__/tinyfish-fetch.test.ts`
+- [x] `npm.cmd run typecheck`
 
 **Dependencies:** Task 8
 
