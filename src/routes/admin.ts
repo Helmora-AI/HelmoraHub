@@ -17,6 +17,7 @@ import type { HubMode } from '../types.js';
 import { buildFallbackChain } from '../services/mode-router.js';
 import {
   getMiniRoleConfigProjection,
+  getMiniCatalogReferences,
   MINI_ROLE_METADATA,
   normalizeMiniRoleConfig,
   resolveMiniRoleAdminState,
@@ -465,7 +466,19 @@ adminRouter.patch('/models/:catalogId', async (req, res, next) => {
 adminRouter.delete('/models/:catalogId', async (req, res, next) => {
   try {
     const store = getStorage().config;
-    const ok = await store.deleteHubModel(String(req.params.catalogId));
+    const catalogId = String(req.params.catalogId);
+    const references = await getMiniCatalogReferences(catalogId);
+    if (references.length > 0) {
+      res.status(409).json({
+        error: {
+          message: 'Model is assigned to Helmora Mini and cannot be deleted.',
+          type: 'model_in_use',
+          references,
+        },
+      });
+      return;
+    }
+    const ok = await store.deleteHubModel(catalogId);
     if (!ok) {
       res.status(404).json({ error: { message: 'Model not found', type: 'not_found' } });
       return;

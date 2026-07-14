@@ -9,7 +9,7 @@
 
 ## Runtime
 
-- [ ] Task 4: Add version 2 and projected legacy references to model catalog delete guard.
+- [x] Task 4: Add version 2 and projected legacy references to model catalog delete guard.
 - [ ] Task 5: Add exact catalog attempts and typed cross-model retry decisions.
 - [ ] Task 6: Integrate role routing into non-stream and stream requests.
 - [ ] Task 7: Add rebuilt-per-attempt identity, exposed headers, error, and usage observability.

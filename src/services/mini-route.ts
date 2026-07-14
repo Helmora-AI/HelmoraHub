@@ -86,6 +86,12 @@ export type MiniResolvedRoleState = {
 
 export type MiniResolvedRoles = Record<MiniRole, MiniResolvedRoleState>;
 
+export type MiniCatalogReference = {
+  kind: 'helmora_mini_role';
+  role: MiniRole;
+  slot: 'primary' | 'fallback';
+};
+
 export const MINI_ROLE_METADATA: ReadonlyArray<{
   id: MiniRole;
   description: string;
@@ -248,6 +254,25 @@ export async function setMiniRoleConfig(config: MiniRoleConfig): Promise<MiniRol
   const normalized = normalizeMiniRoleConfig(config);
   await setSetting(MINI_ROUTE_SETTING, JSON.stringify(normalized));
   return normalized;
+}
+
+export async function getMiniCatalogReferences(
+  catalogId: string
+): Promise<MiniCatalogReference[]> {
+  const projection = await getMiniRoleConfigProjection();
+  const references: MiniCatalogReference[] = [];
+
+  for (const role of MINI_ROLES) {
+    const assignment = projection.config.roles[role];
+    if (assignment.primaryCatalogId === catalogId) {
+      references.push({ kind: 'helmora_mini_role', role, slot: 'primary' });
+    }
+    if (assignment.fallbackCatalogId === catalogId) {
+      references.push({ kind: 'helmora_mini_role', role, slot: 'fallback' });
+    }
+  }
+
+  return references;
 }
 
 export function resolveEffectiveMiniRoleSlots(

@@ -345,6 +345,54 @@ describe('mini-route config', () => {
     ]));
   });
 
+  it('rejects catalog deletion with every explicit v2 Mini role reference', async () => {
+    const store = getConfigStore();
+    const model = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'mini-delete-guard-v2',
+    });
+    const roles = emptyRoles();
+    roles.general.primaryCatalogId = model.id;
+    roles.coding.fallbackCatalogId = model.id;
+    await setMiniRoleConfig({ version: 2, enabled: true, roles });
+
+    const deleted = await request(app)
+      .delete(`/api/models/${model.id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(deleted.status).toBe(409);
+    expect(deleted.body.error).toMatchObject({
+      type: 'model_in_use',
+      references: [
+        { kind: 'helmora_mini_role', role: 'general', slot: 'primary' },
+        { kind: 'helmora_mini_role', role: 'coding', slot: 'fallback' },
+      ],
+    });
+    expect(await store.getHubModel(model.id)).not.toBeNull();
+  });
+
+  it('protects legacy candidate references before the first v2 save', async () => {
+    const store = getConfigStore();
+    const model = await store.createHubModel({
+      providerId: 'paid-upstream',
+      modelId: 'mini-delete-guard-legacy',
+    });
+    await setSetting('mini_route_v1', JSON.stringify({
+      enabled: true,
+      candidates: [{ providerId: model.providerId, modelId: model.modelId }],
+    }));
+
+    const deleted = await request(app)
+      .delete(`/api/models/${model.id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(deleted.status).toBe(409);
+    expect(deleted.body.error.references).toEqual([
+      { kind: 'helmora_mini_role', role: 'general', slot: 'primary' },
+    ]);
+    expect(await store.getHubModel(model.id)).not.toBeNull();
+  });
+
   it('orders enabled candidates first then mode fallback', async () => {
     await updateProvider('paid-upstream', { enabled: true });
     await updateProvider('free-pool', { enabled: true });
