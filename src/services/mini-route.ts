@@ -1,8 +1,213 @@
 import { getSetting, setSetting, listProviders } from '../db/index.js';
+import { getConfigStore } from '../storage/index.js';
 import { HUB_MODES, type HubMode, type ProviderToggle } from '../types.js';
+import type { StoredHubModel } from '../models/types.js';
 import { buildFallbackChain } from './mode-router.js';
+import { MINI_ROLES, type MiniRole } from './mini-classifier.js';
 
 export const MINI_ROUTE_SETTING = 'mini_route_v1';
+
+export type MiniRoleAssignment = {
+  primaryCatalogId: string | null;
+  fallbackCatalogId: string | null;
+};
+
+export type MiniRoleConfig = {
+  version: 2;
+  enabled: boolean;
+  roles: Record<MiniRole, MiniRoleAssignment>;
+};
+
+export type MiniMigrationWarning = {
+  code: 'legacy_candidate_unmapped';
+  candidateIndex: number;
+  providerId: string;
+  modelId: string | null;
+  message: string;
+};
+
+export type MiniRoleConfigProjection = {
+  config: MiniRoleConfig;
+  migratedFromLegacy: boolean;
+  warnings: MiniMigrationWarning[];
+};
+
+export type EffectiveMiniRoleSlot = {
+  slot: 'primary' | 'fallback';
+  catalogId: string;
+  inheritedFromGeneral: boolean;
+};
+
+function emptyRoleAssignments(): Record<MiniRole, MiniRoleAssignment> {
+  return {
+    general: { primaryCatalogId: null, fallbackCatalogId: null },
+    reasoning: { primaryCatalogId: null, fallbackCatalogId: null },
+    coding: { primaryCatalogId: null, fallbackCatalogId: null },
+    research: { primaryCatalogId: null, fallbackCatalogId: null },
+    creative: { primaryCatalogId: null, fallbackCatalogId: null },
+    review: { primaryCatalogId: null, fallbackCatalogId: null },
+  };
+}
+
+export const DEFAULT_MINI_ROLE_CONFIG: MiniRoleConfig = {
+  version: 2,
+  enabled: true,
+  roles: emptyRoleAssignments(),
+};
+
+function normalizeCatalogId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+export function isMiniRoleConfigV2(raw: unknown): boolean {
+  return Boolean(
+    raw
+      && typeof raw === 'object'
+      && (raw as Record<string, unknown>).version === 2
+      && (raw as Record<string, unknown>).roles
+      && typeof (raw as Record<string, unknown>).roles === 'object'
+  );
+}
+
+export function normalizeMiniRoleConfig(raw: unknown): MiniRoleConfig {
+  const roles = emptyRoleAssignments();
+  if (!raw || typeof raw !== 'object') {
+    return { version: 2, enabled: DEFAULT_MINI_ROLE_CONFIG.enabled, roles };
+  }
+
+  const input = raw as Record<string, unknown>;
+  const inputRoles = input.roles && typeof input.roles === 'object'
+    ? input.roles as Record<string, unknown>
+    : {};
+
+  for (const role of MINI_ROLES) {
+    const assignment = inputRoles[role];
+    if (!assignment || typeof assignment !== 'object') continue;
+    const fields = assignment as Record<string, unknown>;
+    roles[role] = {
+      primaryCatalogId: normalizeCatalogId(fields.primaryCatalogId),
+      fallbackCatalogId: normalizeCatalogId(fields.fallbackCatalogId),
+    };
+  }
+
+  return {
+    version: 2,
+    enabled: typeof input.enabled === 'boolean'
+      ? input.enabled
+      : DEFAULT_MINI_ROLE_CONFIG.enabled,
+    roles,
+  };
+}
+
+function findLegacyCatalogModel(
+  candidate: MiniRouteCandidate,
+  catalog: readonly StoredHubModel[]
+): StoredHubModel | null {
+  const providerModels = catalog.filter((model) => model.providerId === candidate.providerId);
+  if (candidate.modelId) {
+    return providerModels.find((model) => model.modelId === candidate.modelId) ?? null;
+  }
+  return providerModels.find((model) => model.isDefault) ?? null;
+}
+
+export function projectLegacyMiniRouteConfig(
+  raw: unknown,
+  catalog: readonly StoredHubModel[]
+): MiniRoleConfigProjection {
+  if (isMiniRoleConfigV2(raw)) {
+    return {
+      config: normalizeMiniRoleConfig(raw),
+      migratedFromLegacy: false,
+      warnings: [],
+    };
+  }
+
+  const legacy = normalizeMiniRouteConfig(raw);
+  const config = normalizeMiniRoleConfig({ enabled: legacy.enabled });
+  const warnings: MiniMigrationWarning[] = [];
+  const targetSlots: Array<keyof MiniRoleAssignment> = [
+    'primaryCatalogId',
+    'fallbackCatalogId',
+  ];
+
+  legacy.candidates.slice(0, 2).forEach((candidate, candidateIndex) => {
+    const model = findLegacyCatalogModel(candidate, catalog);
+    if (model) {
+      config.roles.general[targetSlots[candidateIndex]] = model.id;
+      return;
+    }
+    warnings.push({
+      code: 'legacy_candidate_unmapped',
+      candidateIndex,
+      providerId: candidate.providerId,
+      modelId: candidate.modelId ?? null,
+      message: candidate.modelId
+        ? `Legacy candidate ${candidate.providerId}/${candidate.modelId} is not in the model catalog.`
+        : `Legacy candidate ${candidate.providerId} has no default model in the catalog.`,
+    });
+  });
+
+  return { config, migratedFromLegacy: true, warnings };
+}
+
+export async function getMiniRoleConfigProjection(): Promise<MiniRoleConfigProjection> {
+  const stored = await getSetting(MINI_ROUTE_SETTING);
+  if (!stored) {
+    return {
+      config: normalizeMiniRoleConfig(DEFAULT_MINI_ROLE_CONFIG),
+      migratedFromLegacy: false,
+      warnings: [],
+    };
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stored);
+  } catch {
+    return {
+      config: normalizeMiniRoleConfig(DEFAULT_MINI_ROLE_CONFIG),
+      migratedFromLegacy: false,
+      warnings: [],
+    };
+  }
+
+  const catalog = await getConfigStore().listHubModels({ limit: 500 });
+  return projectLegacyMiniRouteConfig(raw, catalog.models);
+}
+
+export async function setMiniRoleConfig(config: MiniRoleConfig): Promise<MiniRoleConfig> {
+  const normalized = normalizeMiniRoleConfig(config);
+  await setSetting(MINI_ROUTE_SETTING, JSON.stringify(normalized));
+  return normalized;
+}
+
+export function resolveEffectiveMiniRoleSlots(
+  config: MiniRoleConfig,
+  role: MiniRole
+): EffectiveMiniRoleSlot[] {
+  const normalized = normalizeMiniRoleConfig(config);
+  const selected = normalized.roles[role];
+  const general = normalized.roles.general;
+  const effective = [
+    {
+      slot: 'primary' as const,
+      catalogId: selected.primaryCatalogId ?? general.primaryCatalogId,
+      inheritedFromGeneral: role !== 'general' && selected.primaryCatalogId === null,
+    },
+    {
+      slot: 'fallback' as const,
+      catalogId: selected.fallbackCatalogId ?? general.fallbackCatalogId,
+      inheritedFromGeneral: role !== 'general' && selected.fallbackCatalogId === null,
+    },
+  ];
+  const seen = new Set<string>();
+
+  return effective.filter((item): item is EffectiveMiniRoleSlot => {
+    if (!item.catalogId || seen.has(item.catalogId)) return false;
+    seen.add(item.catalogId);
+    return true;
+  });
+}
 
 export type MiniRouteCandidate = {
   /** Provider id from Hub registry */

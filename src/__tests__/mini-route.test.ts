@@ -5,14 +5,21 @@ import path from 'node:path';
 import request from './test-request.js';
 import { loadConfig } from '../lib/config.js';
 import { initStorage, closeStorage } from '../storage/index.js';
-import { getUnifiedApiKey, updateProvider } from '../db/index.js';
+import { getSetting, getUnifiedApiKey, setSetting, updateProvider } from '../db/index.js';
 import { createApp } from '../app.js';
 import {
   DEFAULT_MINI_ROUTE,
+  DEFAULT_MINI_ROLE_CONFIG,
+  getMiniRoleConfigProjection,
   normalizeMiniRouteConfig,
+  normalizeMiniRoleConfig,
+  projectLegacyMiniRouteConfig,
   resolveMiniRouteChain,
+  resolveEffectiveMiniRoleSlots,
   setMiniRouteConfig,
+  setMiniRoleConfig,
 } from '../services/mini-route.js';
+import type { StoredHubModel } from '../models/types.js';
 import type { Express } from 'express';
 
 let app: Express;
@@ -53,6 +60,159 @@ afterAll(async () => {
 });
 
 describe('mini-route config', () => {
+  const catalogModel = (
+    id: string,
+    providerId: string,
+    modelId: string,
+    isDefault = false
+  ): StoredHubModel => ({
+    id,
+    providerId,
+    modelId,
+    displayName: modelId,
+    source: 'manual',
+    notes: null,
+    enabled: true,
+    isDefault,
+    isBenchmark: false,
+    billing: null,
+    inputPricePerMTok: null,
+    outputPricePerMTok: null,
+    contextWindow: null,
+    capabilities: null,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  it('normalizes version 2 role assignments for every fixed role', () => {
+    const config = normalizeMiniRoleConfig({
+      version: 2,
+      enabled: false,
+      roles: {
+        general: {
+          primaryCatalogId: ' mdl-general ',
+          fallbackCatalogId: 'mdl-fallback',
+        },
+        coding: {
+          primaryCatalogId: 'mdl-code',
+          fallbackCatalogId: 42,
+        },
+      },
+    });
+
+    expect(config).toEqual({
+      ...DEFAULT_MINI_ROLE_CONFIG,
+      enabled: false,
+      roles: {
+        ...DEFAULT_MINI_ROLE_CONFIG.roles,
+        general: {
+          primaryCatalogId: 'mdl-general',
+          fallbackCatalogId: 'mdl-fallback',
+        },
+        coding: {
+          primaryCatalogId: 'mdl-code',
+          fallbackCatalogId: null,
+        },
+      },
+    });
+  });
+
+  it('projects legacy candidates onto General without persisting the migration', () => {
+    const result = projectLegacyMiniRouteConfig(
+      {
+        enabled: false,
+        candidates: [
+          { providerId: 'provider-a', modelId: 'model-a' },
+          { providerId: 'provider-b', modelId: null },
+        ],
+      },
+      [
+        catalogModel('mdl-a', 'provider-a', 'model-a'),
+        catalogModel('mdl-b-default', 'provider-b', 'model-b', true),
+      ]
+    );
+
+    expect(result.config.enabled).toBe(false);
+    expect(result.config.roles.general).toEqual({
+      primaryCatalogId: 'mdl-a',
+      fallbackCatalogId: 'mdl-b-default',
+    });
+    expect(result.migratedFromLegacy).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('omits unmatched legacy candidates and returns a migration warning', () => {
+    const result = projectLegacyMiniRouteConfig(
+      {
+        enabled: true,
+        candidates: [{ providerId: 'missing', modelId: 'gone' }],
+      },
+      []
+    );
+
+    expect(result.config.roles.general.primaryCatalogId).toBeNull();
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: 'legacy_candidate_unmapped',
+        candidateIndex: 0,
+      }),
+    ]);
+  });
+
+  it('reads legacy storage non-destructively and persists v2 only on an explicit save', async () => {
+    const legacy = {
+      enabled: true,
+      mode: 'smart',
+      candidates: [{ providerId: 'missing', modelId: 'gone' }],
+      fallbackToModeChain: true,
+    };
+    await setSetting('mini_route_v1', JSON.stringify(legacy));
+
+    const projected = await getMiniRoleConfigProjection();
+    expect(projected.migratedFromLegacy).toBe(true);
+    expect(JSON.parse((await getSetting('mini_route_v1')) ?? '{}')).toEqual(legacy);
+
+    await setMiniRoleConfig(projected.config);
+    expect(JSON.parse((await getSetting('mini_route_v1')) ?? '{}')).toEqual(projected.config);
+  });
+
+  it('inherits missing specialist slots independently and removes duplicates', () => {
+    const config = normalizeMiniRoleConfig({
+      version: 2,
+      roles: {
+        general: {
+          primaryCatalogId: 'mdl-general-primary',
+          fallbackCatalogId: 'mdl-general-fallback',
+        },
+        coding: {
+          primaryCatalogId: 'mdl-code-primary',
+          fallbackCatalogId: null,
+        },
+        review: {
+          primaryCatalogId: null,
+          fallbackCatalogId: 'mdl-review-fallback',
+        },
+        research: {
+          primaryCatalogId: 'mdl-general-fallback',
+          fallbackCatalogId: null,
+        },
+      },
+    });
+
+    expect(resolveEffectiveMiniRoleSlots(config, 'coding')).toEqual([
+      { slot: 'primary', catalogId: 'mdl-code-primary', inheritedFromGeneral: false },
+      { slot: 'fallback', catalogId: 'mdl-general-fallback', inheritedFromGeneral: true },
+    ]);
+    expect(resolveEffectiveMiniRoleSlots(config, 'review')).toEqual([
+      { slot: 'primary', catalogId: 'mdl-general-primary', inheritedFromGeneral: true },
+      { slot: 'fallback', catalogId: 'mdl-review-fallback', inheritedFromGeneral: false },
+    ]);
+    expect(resolveEffectiveMiniRoleSlots(config, 'research')).toEqual([
+      { slot: 'primary', catalogId: 'mdl-general-fallback', inheritedFromGeneral: false },
+    ]);
+    expect(resolveEffectiveMiniRoleSlots(config, 'general')).toHaveLength(2);
+  });
+
   it('normalizes defaults and dedupes candidates', () => {
     const cfg = normalizeMiniRouteConfig({
       enabled: true,
