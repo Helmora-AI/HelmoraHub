@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { AgentConfig, ProviderToggle } from '../types.js';
+import { HUB_MODES, type AgentConfig, type ProviderToggle } from '../types.js';
 import type { ApiKeyRecord } from '../keys/types.js';
 import {
   countPendingOutbox,
@@ -8,6 +9,41 @@ import {
 } from './control-plane.js';
 import type { ConnectorCredentialRecord } from './types.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
+import { isEncryptedSecret } from '../lib/crypto.js';
+
+export const CONTROL_SNAPSHOT_FORMAT_VERSION = 1 as const;
+export const CONTROL_SNAPSHOT_BUILD_SCHEMA_VERSION = 1;
+
+export type ControlSnapshotCapability = {
+  id: string;
+  tier: 'core_serving' | 'enabled_feature' | 'optional_admin';
+  present: boolean;
+};
+
+export type ControlSnapshotManifest = {
+  generation: number;
+  formatVersion: typeof CONTROL_SNAPSHOT_FORMAT_VERSION;
+  buildSchemaVersion: number;
+  createdAt: number;
+  completedAt: number;
+  complete: true;
+  capabilities: ControlSnapshotCapability[];
+  entityCounts: Record<string, number>;
+  checksum: string;
+};
+
+export type LegacySnapshotPromotionResult =
+  | { ok: true; manifest: ControlSnapshotManifest; warnings: string[] }
+  | {
+      ok: false;
+      reason:
+        | 'trusted_sync_marker_missing'
+        | 'migration_in_progress'
+        | 'required_capability_missing'
+        | 'untrusted_legacy_rows'
+        | 'invalid_legacy_data';
+      missingCapabilities?: string[];
+    };
 
 export function ensureControlVaultSchema(db: Database.Database): void {
   db.exec(`
@@ -15,7 +51,9 @@ export function ensureControlVaultSchema(db: Database.Database): void {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       last_sync_at INTEGER,
       generation INTEGER NOT NULL DEFAULT 0,
-      plane_json TEXT
+      plane_json TEXT,
+      active_generation INTEGER,
+      migration_state TEXT NOT NULL DEFAULT 'complete'
     );
 
     INSERT OR IGNORE INTO control_vault_meta (id, last_sync_at, generation, plane_json)
@@ -67,7 +105,27 @@ export function ensureControlVaultSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS control_outbox_pending_idx
       ON control_outbox (created_at, op_id)
       WHERE applied_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS control_snapshot_manifests (
+      generation INTEGER PRIMARY KEY,
+      manifest_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
   `);
+
+  const metaColumns = new Set(
+    (db.prepare('PRAGMA table_info(control_vault_meta)').all() as Array<{ name: string }>).map(
+      (column) => column.name
+    )
+  );
+  if (!metaColumns.has('active_generation')) {
+    db.exec('ALTER TABLE control_vault_meta ADD COLUMN active_generation INTEGER');
+  }
+  if (!metaColumns.has('migration_state')) {
+    db.exec(
+      "ALTER TABLE control_vault_meta ADD COLUMN migration_state TEXT NOT NULL DEFAULT 'complete'"
+    );
+  }
 }
 
 export class ControlVault {
@@ -79,22 +137,39 @@ export class ControlVault {
     lastSyncAt?: number | null;
     generation?: number;
     planeJson?: string | null;
+    activeGeneration?: number | null;
+    migrationState?: 'complete' | 'running';
   }): void {
     const cur = this.db
-      .prepare('SELECT last_sync_at, generation, plane_json FROM control_vault_meta WHERE id = 1')
-      .get() as { last_sync_at: number | null; generation: number; plane_json: string | null };
+      .prepare(
+        `SELECT last_sync_at, generation, plane_json, active_generation, migration_state
+         FROM control_vault_meta WHERE id = 1`
+      )
+      .get() as {
+      last_sync_at: number | null;
+      generation: number;
+      plane_json: string | null;
+      active_generation: number | null;
+      migration_state: 'complete' | 'running';
+    };
     this.db
       .prepare(
         `UPDATE control_vault_meta SET
           last_sync_at = ?,
           generation = ?,
-          plane_json = ?
+          plane_json = ?,
+          active_generation = ?,
+          migration_state = ?
          WHERE id = 1`
       )
       .run(
         patch.lastSyncAt !== undefined ? patch.lastSyncAt : cur.last_sync_at,
         patch.generation !== undefined ? patch.generation : cur.generation,
-        patch.planeJson !== undefined ? patch.planeJson : cur.plane_json
+        patch.planeJson !== undefined ? patch.planeJson : cur.plane_json,
+        patch.activeGeneration !== undefined
+          ? patch.activeGeneration
+          : cur.active_generation,
+        patch.migrationState !== undefined ? patch.migrationState : cur.migration_state
       );
   }
 
@@ -102,15 +177,196 @@ export class ControlVault {
     lastSyncAt: number | null;
     generation: number;
     planeJson: string | null;
+    activeGeneration: number | null;
+    migrationState: 'complete' | 'running';
   } {
     const row = this.db
-      .prepare('SELECT last_sync_at, generation, plane_json FROM control_vault_meta WHERE id = 1')
-      .get() as { last_sync_at: number | null; generation: number; plane_json: string | null };
+      .prepare(
+        `SELECT last_sync_at, generation, plane_json, active_generation, migration_state
+         FROM control_vault_meta WHERE id = 1`
+      )
+      .get() as {
+      last_sync_at: number | null;
+      generation: number;
+      plane_json: string | null;
+      active_generation: number | null;
+      migration_state: 'complete' | 'running';
+    };
     return {
       lastSyncAt: row.last_sync_at,
       generation: row.generation,
       planeJson: row.plane_json,
+      activeGeneration: row.active_generation,
+      migrationState: row.migration_state,
     };
+  }
+
+  getActiveSnapshotManifest(): ControlSnapshotManifest | null {
+    const activeGeneration = this.getMeta().activeGeneration;
+    if (activeGeneration == null) return null;
+    const row = this.db
+      .prepare('SELECT manifest_json FROM control_snapshot_manifests WHERE generation = ?')
+      .get(activeGeneration) as { manifest_json: string } | undefined;
+    return row ? (JSON.parse(row.manifest_json) as ControlSnapshotManifest) : null;
+  }
+
+  promoteLegacyGenerationZero(now = Date.now()): LegacySnapshotPromotionResult {
+    const existing = this.getActiveSnapshotManifest();
+    if (existing) return { ok: true, manifest: existing, warnings: [] };
+
+    const meta = this.getMeta();
+    if (meta.lastSyncAt == null) {
+      return { ok: false, reason: 'trusted_sync_marker_missing' };
+    }
+    if (meta.migrationState !== 'complete') {
+      return { ok: false, reason: 'migration_in_progress' };
+    }
+
+    try {
+      const providers = this.listProviders();
+      const apiKeys = this.listApiKeys();
+      const agents = this.listAgents();
+      const activeMode = this.getSetting('active_mode');
+      const tinyfishEnabled = this.tinyfishFeatureEnabled();
+      const tinyfishCredential = this.getConnectorCredential('tinyfish');
+      const capabilities: ControlSnapshotCapability[] = [
+        { id: 'providers', tier: 'core_serving', present: providers.length > 0 },
+        {
+          id: 'api_keys',
+          tier: 'core_serving',
+          present: apiKeys.length > 0 && apiKeys.every((key) => Boolean(key.keyHash)),
+        },
+        {
+          id: 'agents',
+          tier: 'core_serving',
+          present:
+            agents.length > 0 && agents.every((agent) => HUB_MODES.includes(agent.mode)),
+        },
+        {
+          id: 'active_mode',
+          tier: 'core_serving',
+          present: activeMode != null && HUB_MODES.includes(activeMode as (typeof HUB_MODES)[number]),
+        },
+        {
+          id: 'pricing_overrides',
+          tier: 'optional_admin',
+          present: this.getSetting('pricing_overrides') != null,
+        },
+      ];
+      if (tinyfishEnabled) {
+        capabilities.push({
+          id: 'tinyfish_connector_credential',
+          tier: 'enabled_feature',
+          present:
+            tinyfishCredential != null &&
+            isEncryptedSecret(tinyfishCredential.encryptedSecret),
+        });
+      }
+      const missingCapabilities = capabilities
+        .filter((capability) => capability.tier !== 'optional_admin' && !capability.present)
+        .map((capability) => capability.id);
+      if (missingCapabilities.length > 0) {
+        return {
+          ok: false,
+          reason: 'required_capability_missing',
+          missingCapabilities,
+        };
+      }
+
+      const maxRequiredUpdate = this.maxRequiredLegacyUpdatedAt(tinyfishEnabled);
+      if (maxRequiredUpdate == null || maxRequiredUpdate > meta.lastSyncAt) {
+        return { ok: false, reason: 'untrusted_legacy_rows' };
+      }
+
+      const entityCounts = {
+        providers: providers.length,
+        apiKeys: apiKeys.length,
+        agents: agents.length,
+        connectorCredentials: this.countRows('control_vault_connector_credentials'),
+      };
+      const checksum = createHash('sha256')
+        .update(
+          JSON.stringify({
+            providers,
+            apiKeys,
+            agents,
+            activeMode,
+            entityCounts,
+            lastSyncAt: meta.lastSyncAt,
+          })
+        )
+        .digest('hex');
+      const manifest: ControlSnapshotManifest = {
+        generation: 0,
+        formatVersion: CONTROL_SNAPSHOT_FORMAT_VERSION,
+        buildSchemaVersion: CONTROL_SNAPSHOT_BUILD_SCHEMA_VERSION,
+        createdAt: now,
+        completedAt: now,
+        complete: true,
+        capabilities,
+        entityCounts,
+        checksum,
+      };
+      const activate = this.db.transaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO control_snapshot_manifests (generation, manifest_json, created_at)
+             VALUES (?, ?, ?)`
+          )
+          .run(0, JSON.stringify(manifest), now);
+        this.db
+          .prepare('UPDATE control_vault_meta SET active_generation = 0 WHERE id = 1')
+          .run();
+      });
+      activate();
+      return {
+        ok: true,
+        manifest,
+        warnings: capabilities
+          .filter((capability) => capability.tier === 'optional_admin' && !capability.present)
+          .map((capability) => capability.id),
+      };
+    } catch {
+      return { ok: false, reason: 'invalid_legacy_data' };
+    }
+  }
+
+  private countRows(table: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
+      count: number;
+    };
+    return row.count;
+  }
+
+  private tinyfishFeatureEnabled(): boolean {
+    const raw = this.getSetting('tool_runtime_v1');
+    if (raw == null) return false;
+    const parsed = JSON.parse(raw) as {
+      enabled?: unknown;
+      connectors?: { tinyfish?: { enabled?: unknown } };
+    };
+    return parsed.enabled === true && parsed.connectors?.tinyfish?.enabled === true;
+  }
+
+  private maxRequiredLegacyUpdatedAt(includeTinyfish: boolean): number | null {
+    const settingKeys = includeTinyfish
+      ? "key IN ('active_mode', 'tool_runtime_v1')"
+      : "key = 'active_mode'";
+    const connectorRows = includeTinyfish
+      ? 'UNION ALL SELECT updated_at FROM control_vault_connector_credentials WHERE connector_id = \'tinyfish\''
+      : '';
+    const row = this.db
+      .prepare(
+        `SELECT MAX(updated_at) AS updated_at FROM (
+           SELECT updated_at FROM control_vault_providers
+           UNION ALL SELECT updated_at FROM control_vault_api_keys
+           UNION ALL SELECT updated_at FROM control_vault_agents
+           UNION ALL SELECT updated_at FROM control_vault_settings WHERE ${settingKeys}
+           ${connectorRows}
+         )`
+      )
+      .get() as { updated_at: number | null };
+    return row.updated_at;
   }
 
   upsertProvider(provider: ProviderToggle, updatedAt = Date.now()): void {
