@@ -55,11 +55,20 @@
 | Layer | Where |
 |-------|--------|
 | Control (providers, keys, agents, settings) | Local SQLite **or** Supabase (hybrid primary) |
-| Vault + outbox + workspace | Local disk under `DATA_DIR` |
+| Trusted control snapshot + workspace | Local disk under `DATA_DIR` |
 | Secrets at rest | AES-GCM (`ENCRYPTION_KEY`) |
 | Rate / cooldown / sticky | Memory or Redis |
 
-Pick storage in Settings (`http://127.0.0.1:20800/settings`) or via runtime config. Full notes: [`docs/deploy.md`](docs/deploy.md).
+Hybrid startup opens the local SQLite snapshot first and probes Supabase only after
+the HTTP server is live. A complete snapshot keeps model routes available during a
+temporary control-plane outage. Without one, Hub stays live in a restricted
+recovery-only mode: `GET /health` remains `200`, `GET /ready` returns `503`, and
+model/admin serving is blocked until storage is repaired.
+
+Set `HELMORA_RECOVERY_TOKEN` on Hybrid deployments, apply the idempotent Supabase
+schema, and persist `DATA_DIR`. The token can create a short-lived, storage-only
+recovery session; it is never accepted as an admin or `/v1` credential. Full setup,
+migration, and rollback notes: [`docs/deploy.md`](docs/deploy.md).
 
 ## Quick start
 
@@ -75,6 +84,7 @@ Smoke:
 
 ```bash
 curl http://127.0.0.1:20800/health
+curl http://127.0.0.1:20800/ready
 curl http://127.0.0.1:20800/api/status
 ```
 
@@ -113,8 +123,9 @@ still restarting:
 
 1. Push/deploy Hub and restart its Pterodactyl service.
 2. Wait for the `Cloudflare connector registered` log entry.
-3. Confirm several consecutive public requests to `GET /health` and
-   `GET /api/auth/status` return `200`.
+3. Confirm `GET /health` returns `200`, then require `GET /ready` to return `200`
+   before sending model traffic. `GET /health` alone also succeeds in recovery-only
+   mode and is therefore not a serving-readiness check.
 4. Confirm a browser-origin preflight returns `204` with
    `Access-Control-Allow-Origin` before deploying Cloudflare Pages.
 

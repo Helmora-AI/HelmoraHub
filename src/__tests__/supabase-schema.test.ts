@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   formatSupabaseControlError,
   isDegradableSupabaseControlError,
@@ -66,6 +68,26 @@ describe('supabase-schema helpers', () => {
     expect(sql).toContain('create table if not exists public.helmora_tool_runs');
     expect(sql).toContain('alter table public.helmora_tool_runs enable row level security');
     expect(sql).not.toContain('raw_url text');
+  });
+
+  it('ships a standalone idempotent Tools migration for existing Supabase installs', () => {
+    const migrationPath = path.resolve(
+      process.cwd(),
+      'sql/migrations/004_tools_control_plane.sql'
+    );
+    const sql = fs.readFileSync(migrationPath, 'utf8').toLowerCase();
+
+    expect(sql).toContain(
+      'create table if not exists public.helmora_connector_credentials'
+    );
+    expect(sql).toContain('create table if not exists public.helmora_tool_runs');
+    expect(sql).toContain('create index if not exists helmora_tool_runs_created_idx');
+    expect(sql).toContain(
+      'alter table public.helmora_connector_credentials enable row level security'
+    );
+    expect(sql).toContain('alter table public.helmora_tool_runs enable row level security');
+    expect(sql).not.toContain('drop table');
+    expect(sql).not.toContain('truncate');
   });
 
   it('exposes API hints', () => {

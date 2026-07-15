@@ -21,6 +21,7 @@ beforeAll(async () => {
   process.env.RATE_BACKEND = 'memory';
   delete process.env.HELMORA_API_KEY;
   delete process.env.HELMORA_ADMIN_TOKEN;
+  delete process.env.HELMORA_ADMIN_PASSWORD;
 
   const config = loadConfig();
   config.dataDir = tmpDir;

@@ -33,25 +33,79 @@ When you pick **SQL** in Settings, Hub runs **hybrid** mode: Supabase is the con
 
 ### Outage and recovery
 
-1. **Online** — writes go to Supabase; after success, Hub mirrors into the local vault.
-2. **Degraded** — if Supabase is unreachable, Hub serves/writes the vault and appends ops to a local **outbox**. Settings shows a banner; `/api/status` → `control.controlPlane === 'degraded'` and `outboxPending`.
-3. **Reconciling** — when Supabase returns, Hub replays the outbox, refreshes the vault from Supabase, then returns to `online`.
+Hybrid boot is local-first for availability:
 
-`/v1` keeps working during outages (auth against vault). Control mutations during reconcile may briefly wait.
+1. Hub opens and validates the local control snapshot before contacting Supabase.
+2. The HTTP server starts, then one serialized background probe checks Supabase.
+3. With a complete trusted snapshot, `/v1` keeps serving during a temporary remote outage and control state becomes `degraded`.
+4. Without a complete snapshot, Hub enters `recovery_only`: liveness and recovery authentication remain available, but `/ready`, model routes, and ordinary admin routes fail closed.
+
+The transactional local-first mutation outbox and causal replay are a later rollout
+phase. Until that phase ships, do not treat offline control-plane edits as durable
+or assume they will be replayed automatically. Runtime serving from the last complete
+snapshot is independent of that future write path.
+
+Health endpoints are intentionally different:
+
+| Endpoint | Meaning |
+|----------|---------|
+| `GET /health` | Process and local SQLite are alive. Returns `200` in recovery-only mode too. |
+| `GET /ready` | Model/admin serving has a complete control snapshot. Returns `503` in recovery-only mode. |
+| `GET /api/storage/health` | Masked control diagnostics for a recovery session. No secrets or raw Supabase errors. |
+
+### Break-glass storage recovery
+
+Set a strong, unique `HELMORA_RECOVERY_TOKEN` in the VPS/Pterodactyl environment
+before restart. The environment value is authoritative and is not written to
+`runtime-config.json`. If it is not environment-managed, initial admin setup returns
+a generated recovery token once; an authenticated admin can rotate it later.
+
+Recovery authentication is separate from admin and `/v1` authentication:
+
+```bash
+curl -sS -X POST https://hub.example.com/api/auth/recovery-login \
+  -H "Content-Type: application/json" \
+  --data '{"token":"YOUR_RECOVERY_TOKEN"}'
+```
+
+Use the returned short-lived bearer token only on the storage recovery endpoints:
+
+```text
+GET  /api/storage/health
+POST /api/storage/test
+GET  /api/settings/storage
+GET  /api/settings/storage/schema
+PUT  /api/settings/storage
+```
+
+The recovery session cannot call model routes or ordinary admin routes. Credential
+replacement is encrypted in a dedicated local recovery vault, never stored in the
+general settings document, and returns `restartRequired: true`. Restart Hub after a
+successful repair so the normal storage pipeline is rebuilt cleanly.
 
 ### Schema (required before SQL mode)
 
 1. Open **Supabase Dashboard → SQL Editor → New query**.
 2. Paste and run the full contents of [`sql/supabase-schema.sql`](../sql/supabase-schema.sql) (source of truth; see also [`sql/migrations/README.md`](../sql/migrations/README.md)).
 3. If you still have legacy `ctrlhub_*` table names, run [`sql/rename-ctrlhub-to-helmora.sql`](../sql/rename-ctrlhub-to-helmora.sql) once.
-4. In Helmora Settings choose **SQL (Supabase)**, enter URL + service role key + encryption key, **Test connection**, then **Apply**.
-5. Persist `DATA_DIR` on the Hub host (Ptero volume / Docker volume) — vault + outbox + workspace live there.
+4. Existing installs missing only the Tools tables may instead run the standalone idempotent [`sql/migrations/004_tools_control_plane.sql`](../sql/migrations/004_tools_control_plane.sql). The full schema remains authoritative.
+5. In Helmora Settings choose **SQL (Supabase)**, enter URL + service role key + encryption key, **Test connection**, then **Apply**.
+6. Persist `DATA_DIR` on the Hub host (Ptero volume / Docker volume) — the trusted snapshot, encrypted recovery vault, and workspace live there.
 
 Admin helper: `GET /api/settings/storage/schema` returns the SQL text for copy/paste.
 
 **Not stored in Supabase (hybrid):** heavy workspace data (usage, model catalog growth, Playground chat) stay on Hub local SQLite. Control-plane settings/providers/agents/keys live on Supabase.
 
-Health fields (no secrets): `GET /api/status` → `control: { controlPlane, vault, outboxPending }`.
+Health fields contain no secrets. Use `/health` for liveness and `/ready` for traffic readiness; authenticated admin status also exposes masked control state.
+
+### Rollback
+
+The Supabase schema and migration `004` are additive and idempotent. A code rollback
+does not require dropping their tables; leaving them in place is safer. Before any
+storage repair, back up the persistent `DATA_DIR`. If a repaired URL or credential is
+wrong, restore the previous environment value or backup of the local runtime/recovery
+files, then restart the previous Hub build. Never delete the SQLite snapshot while it
+is the only known-good control copy.
 
 ### OAuth Connect (Claude / Codex)
 
@@ -256,6 +310,7 @@ Startup: `bash scripts/ptero-startup.sh` (Linux custom command; fallback `node s
 | `NODE_ENV` | — | `production` ⇒ bind `0.0.0.0` |
 | `ENCRYPTION_KEY` | — | Recommended always; required for SQL |
 | `HELMORA_API_KEY` | auto | Unified `/v1` key (`CTRLHUB_API_KEY` legacy fallback) |
+| `HELMORA_RECOVERY_TOKEN` | — | Recommended break-glass credential for Hybrid storage repair; keep separate from admin and `/v1` keys |
 | `RATE_BACKEND` | `memory` | `redis` + `REDIS_URL` on multi-instance |
 | `SUPABASE_*` | — | Optional; Settings UI can set SQL mode |
 
@@ -270,6 +325,8 @@ Storage preference lives in **Settings** → `data/runtime-config.json` (not onl
 - [ ] Open `/settings` once → **create admin password** (copy admin token shown once)
 - [ ] Confirm Local vs SQL storage
 - [ ] If SQL: schema applied; service role key only on server
+- [ ] If SQL: set and securely store `HELMORA_RECOVERY_TOKEN`; persist and back up `DATA_DIR`
+- [ ] Require `/ready` = `200` before routing model traffic (`/health` alone is liveness)
 - [ ] Optional: Cloudflare Tunnel token in Settings (Public Hostname → `http://127.0.0.1:PORT`)
 - [ ] Firewall / TLS reverse proxy (or rely on Cloudflare Tunnel and keep Hub on localhost)
 - [ ] External admin scripts: `Authorization: Bearer <admin-token>` or `X-Admin-Token` (not the `/v1` API key)
@@ -291,8 +348,9 @@ API: `GET|PUT /api/settings/tunnel`, `POST /api/settings/tunnel/start|stop`.
 
 ### Rollout order for Hub + Admin SPA
 
-Deploy/restart the Hub first. Wait until both `GET /health` and `GET /api/auth/status`
-return `200` repeatedly through the public hostname, then deploy the Admin SPA. A single
+Deploy/restart the Hub first. Wait until `GET /health` and `GET /api/auth/status`
+return `200`, and require `GET /ready` to return `200` repeatedly through the public
+hostname before routing model traffic or deploying the Admin SPA. A single
 Pterodactyl instance can briefly return Cloudflare `502` while Node and `cloudflared`
 restart; the tunnel manager retries failed startup/reconnect attempts with bounded
 exponential backoff.

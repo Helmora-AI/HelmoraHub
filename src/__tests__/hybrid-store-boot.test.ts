@@ -19,6 +19,8 @@ import { SqliteConfigStore } from '../storage/sqlite-store.js';
 import type { ConfigStore } from '../storage/types.js';
 import request from './test-request.js';
 
+const originalRecoveryToken = process.env.HELMORA_RECOVERY_TOKEN;
+
 function configFor(dir: string): Config {
   const config = loadConfig();
   config.dataDir = dir;
@@ -48,6 +50,11 @@ describe('Hybrid storage local-first boot', () => {
   afterEach(async () => {
     await closeStorage();
     vi.useRealTimers();
+    if (originalRecoveryToken === undefined) {
+      delete process.env.HELMORA_RECOVERY_TOKEN;
+    } else {
+      process.env.HELMORA_RECOVERY_TOKEN = originalRecoveryToken;
+    }
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -184,6 +191,60 @@ describe('Hybrid storage local-first boot', () => {
 
     const authStatus = await request(app).get('/api/auth/status');
     expect(authStatus.status).toBe(200);
+  });
+
+  it('exposes scoped repair endpoints after the original missing Tools table startup failure', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-boot-recovery-'));
+    process.env.HELMORA_RECOVERY_TOKEN =
+      'helmora-recovery-token-production-regression-value';
+
+    await initStorage(configFor(tmpDir), {
+      createHybridControl: () => ({
+        store: { close: async () => undefined } as ConfigStore,
+        bootstrap: async () => {
+          throw formatSupabaseControlError(
+            'getConnectorCredentialRecord',
+            "Could not find the table 'public.helmora_connector_credentials' in the schema cache"
+          );
+        },
+      }),
+    });
+    await startControlPlaneProbe();
+
+    const app = createApp(configFor(tmpDir));
+    const health = await request(app).get('/health');
+    expect(health.status).toBe(200);
+    expect(health.body).toMatchObject({
+      controlState: 'recovery_only',
+      servingReady: false,
+      recoveryReady: true,
+    });
+    expect((await request(app).get('/ready')).status).toBe(503);
+
+    const login = await request(app)
+      .post('/api/auth/recovery-login')
+      .send({ token: process.env.HELMORA_RECOVERY_TOKEN });
+    expect(login.status).toBe(200);
+    expect(login.body.token).toMatch(/^helmora_recovery_session_/);
+
+    const authorization = `Bearer ${login.body.token as string}`;
+    const storageHealth = await request(app)
+      .get('/api/storage/health')
+      .set('Authorization', authorization);
+    expect(storageHealth.status).toBe(200);
+    expect(storageHealth.body).toMatchObject({
+      controlState: 'recovery_only',
+      degradedReason: 'schema_incomplete',
+      degradedCapability: 'helmora_connector_credentials',
+    });
+
+    const schema = await request(app)
+      .get('/api/settings/storage/schema')
+      .set('Authorization', authorization);
+    expect(schema.status).toBe(200);
+    expect(schema.body.sql).toContain(
+      'create table if not exists public.helmora_connector_credentials'
+    );
   });
 
   it('starts one probe loop, prevents overlap, and drains it on stop', async () => {

@@ -22,6 +22,10 @@ If you already applied an older `supabase-schema.sql` and only need new Playgrou
 
 If `updateProvider` fails with missing `pinned_models`, run [`003_pinned_models.sql`](./003_pinned_models.sql).
 
+If a Tools-enabled Hub reports missing `helmora_connector_credentials` or
+`helmora_tool_runs`, run [`004_tools_control_plane.sql`](./004_tools_control_plane.sql).
+It is standalone, additive, and idempotent. Do not delete existing tables first.
+
 **Hybrid note:** Playground chat history is stored in Hub **local SQLite workspace** (same as usage events), not in browser `localStorage`. The Supabase chat tables keep schema parity with `SupabaseConfigStore`; hybrid mode does not require `002` for Playground to work after upgrading Hub.
 
 ## Versioned copies (optional)

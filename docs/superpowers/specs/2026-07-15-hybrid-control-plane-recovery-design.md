@@ -1,7 +1,7 @@
 # Hybrid Control Plane Recovery Design
 
 **Date:** 2026-07-15
-**Status:** Revised after second design review, pending approval
+**Status:** Approved, amended during implementation planning
 **Surface:** HelmoraHub storage, Supabase schema, admin storage health
 
 ## Objective
@@ -82,6 +82,33 @@ Model-serving routes and normal admin mutation surfaces return:
 }
 ```
 
+### Liveness, recovery readiness, and serving readiness
+
+Process liveness, recovery readiness, and model-serving readiness are separate
+signals. A live HTTP process must remain observable even when it cannot safely
+serve models.
+
+```ts
+type ControlAvailability = {
+  controlState: 'recovery_only' | 'degraded' | 'probing' | 'reconciling' | 'online';
+  servingReady: boolean;
+  recoveryReady: boolean;
+};
+```
+
+- `GET /health` returns HTTP 200 whenever the Hub process, HTTP stack, and local
+  SQLite workspace are live. Its response includes `controlState`,
+  `servingReady`, and `recoveryReady`.
+- `GET /ready` returns HTTP 200 only when `servingReady=true`; otherwise it
+  returns HTTP 503, including when the process is healthy and recovery-ready.
+- A valid complete local snapshot can make `servingReady=true` while Supabase is
+  degraded or unavailable.
+- A missing or unusable snapshot makes `servingReady=false`. Recovery endpoints
+  may still make `recoveryReady=true` when independent recovery authentication
+  and the storage repair surface are available.
+- Load balancers and deployment readiness checks use `/ready`. Process monitors
+  and diagnostics use `/health`.
+
 ### Recovery authentication
 
 Recovery authentication is independent from Supabase and normal Helmora API
@@ -155,7 +182,7 @@ type RecoveryStorageTestResponse = {
 };
 
 type RecoveryStorageHealthResponse = {
-  controlState: 'recovery' | 'degraded' | 'probing' | 'reconciling' | 'online';
+  controlState: 'recovery_only' | 'degraded' | 'probing' | 'reconciling' | 'online';
   snapshotAvailable: boolean;
   activeGeneration: string | null;
   recoveryAvailable: boolean;
@@ -163,10 +190,13 @@ type RecoveryStorageHealthResponse = {
 };
 
 type RecoveryStorageUpdateInput = {
-  storageChoice: 'sql';
   supabaseUrl?: string;
-  supabaseServiceRoleKey?: string;
-  encryptionKey?: string;
+  supabaseCredentialOperation?:
+    | { kind: 'retain' }
+    | { kind: 'replace'; value: string };
+  storageModeOperation?:
+    | { kind: 'retain' }
+    | { kind: 'switch_to_sql' };
 };
 ```
 
@@ -178,11 +208,26 @@ admin mutation surfaces. Leaving recovery mode requires a valid control snapshot
 and normal authentication; a recovery session is never silently upgraded into
 a full admin session.
 
-Recovery storage updates require at least one changed field and never accept
-secret-clear operations. An encryption key may be persisted only when there is
-no usable encrypted snapshot, or when it matches the active vault key identity;
-key rotation belongs to H4. A successful update returns masked configuration and
-`restartRequired`, matching the existing storage-settings lifecycle.
+Recovery storage updates require at least one changed field and obey these exact
+secret and transition rules:
+
+- The Supabase URL is non-secret connection metadata and may be persisted
+  locally.
+- When `SUPABASE_SERVICE_ROLE_KEY` is environment-managed, API replacement is
+  forbidden and returns HTTP 409 `credential_env_managed`.
+- When the Supabase secret is locally managed, `replace` encrypts it in the
+  dedicated local recovery vault. It never enters generic runtime settings JSON.
+- Secret clear is intentionally absent from the DTO and is always forbidden.
+- The local encryption key is not accepted, replaced, cleared, or rotated through
+  the H1 recovery update API. Key rotation belongs to H4.
+- Storage mode transitions are allowlisted. H1 permits only retaining the current
+  mode or switching to `sql`; arbitrary mode strings and implicit downgrades are
+  rejected.
+
+`RecoveryStorageTestInput` remains transient and may accept request-supplied
+bootstrap material for a cache-free probe, but it never persists those values. A
+successful update returns masked configuration and `restartRequired`, matching
+the existing storage-settings lifecycle.
 
 New admin setup generates and returns a recovery token once and stores only its
 local hash. `POST /api/auth/rotate-recovery-token` requires normal full-admin
@@ -230,14 +275,18 @@ type ControlMutationEnvelope = {
 
 Every H2 control-mutation endpoint requires an `Idempotency-Key` header of
 16--128 visible ASCII characters excluding whitespace and control characters.
-The Admin SPA generates one UUID per user submission and retains it across
-transport retries. Hub scopes the key to the authenticated actor and mutation
-endpoint, stores only its hash, and maps it to one stable server-generated
-`operationId`.
+The Admin SPA generates one UUID once per logical save and retains it across
+network retries and ambiguous responses. It creates a new UUID only after a
+terminal response or after the user changes the logical draft. Hub scopes the
+key to the authenticated actor plus route/action, stores only its hash, and maps
+it to one stable server-generated `operationId`.
 
 The request fingerprint is HMAC-SHA-256 over the canonical validated mutation,
 using a local server key. Secret input participates in the in-memory HMAC but is
-never copied into the fingerprint or logs. Transport-only fields and randomized
+never copied into the fingerprint or logs. Its canonical input is the HTTP
+method, normalized route/action, authenticated actor identity, target entity
+identity, and normalized validated body. It is never calculated from raw JSON.
+Transport-only fields, property order, omitted defaults, and randomized
 ciphertext bytes are excluded so a semantic retry produces the same fingerprint.
 
 - Same scoped key and same canonical request fingerprint returns the existing
@@ -247,6 +296,11 @@ ciphertext bytes are excluded so a semantic retry produces the same fingerprint.
 - Missing or malformed keys return HTTP 400 before a local operation is created.
 - Internal reconciler retries always reuse the stored `operationId`; they do not
   create a new client idempotency scope.
+
+Applied idempotency receipts are retained for 30 days. Pending and conflict
+receipts are retained until resolved, then retained for the same 30-day window.
+Cleanup is bounded to at most 500 terminal receipts per pass and never removes an
+active pending/conflict operation or an unexpired secret-delivery envelope.
 
 ```ts
 type ControlMutationReceipt = {
@@ -266,10 +320,20 @@ receipt and canonical public result for that operation.
 Exactly-once mutation does not imply replaying one-time plaintext. For client
 API-key creation, remote state and hashes are deduplicated by operation ID, but a
 lost plaintext response is not reconstructed from the remote ledger. The local
-vault retains an encrypted delivery envelope for at most 10 minutes, scoped to
-the same actor and idempotency key and never synchronized remotely. After expiry,
-retry returns `secret_delivery_expired` and the administrator must rotate/revoke
-rather than creating a duplicate key.
+vault retains an encrypted delivery envelope for at most 10 minutes with these
+semantics:
+
+- It is bound to the authenticated actor ID, stable operation ID, idempotency-key
+  hash, and created API-key hash.
+- The same actor and idempotency key may retrieve the same plaintext repeatedly
+  until expiry, including after a process restart.
+- It is not listable and cannot be fetched by API-key ID alone.
+- Setting `deliveredAt` records delivery but does not delete or invalidate the
+  envelope before expiry.
+- Every successful and rejected delivery attempt creates a redacted audit event.
+- The envelope is local-only, encrypted, and never synchronized to Supabase.
+- Bounded cleanup removes it only after expiry. A retry after 10 minutes returns
+  `secret_delivery_expired` and never creates another API key.
 
 The mutation path is:
 
@@ -313,6 +377,11 @@ Multi-record invariants are one logical mutation, including:
 They are never replayed as independent REST writes. One-time plaintext values
 such as a newly generated client API key are returned only by the original local
 request path and are not stored in the remote mutation ledger.
+
+H2 implements this contract for non-secret control mutations. API-key and OAuth
+entries above define their eventual logical transaction boundary, but their
+mutations remain online-only/fail closed through H3. H4 enables their idempotent
+mutation paths and API-key secret delivery.
 
 ## Failure Transition and Offline Writes
 
@@ -416,14 +485,48 @@ generation and switches it atomically only after completeness validation.
 ```ts
 type ControlSnapshotManifest = {
   generationId: string;
-  schemaVersion: number;
+  generation: number;
+  formatVersion: 1;
+  buildSchemaVersion: number;
   encryptionVersion: number;
   createdAt: string;
+  completedAt: string | null;
   complete: boolean;
-  capabilities: string[];
+  capabilities: Array<{
+    id: string;
+    tier: 'core_serving' | 'enabled_feature' | 'optional_admin';
+    present: boolean;
+  }>;
+  entityCounts: Record<string, number>;
   checksum: string;
 };
 ```
+
+### Legacy generation-zero promotion
+
+H1A may promote existing legacy mirror rows exactly once into generation zero.
+Promotion is allowed only when all of these checks pass for the current build:
+
+1. Every `core_serving` capability is present.
+2. Every `enabled_feature` capability is present for features enabled by the
+   legacy settings. A disabled feature does not make its capability required.
+3. Missing `optional_admin` capabilities are reported but do not block serving.
+4. Every encrypted record required by the promoted capabilities decrypts with the
+   active local key and every cross-entity reference resolves.
+5. No local schema/vault migration is running or left incomplete.
+6. A trusted local source/synchronization marker proves the rows came from a
+   previously successful control-plane read or locally authoritative legacy
+   setup. Mere presence of rows is insufficient.
+7. The manifest records generation `0`, `formatVersion`, the current
+   `buildSchemaVersion`, creation/completion timestamps, `complete=true`, the
+   tiered capability results, entity counts, and a checksum over the canonical
+   promoted snapshot.
+8. The generation-zero manifest and `activeGeneration` pointer commit in the same
+   SQLite transaction.
+
+Failure of any blocking check leaves the legacy rows untouched and enters
+recovery-only mode. Promotion is never inferred from table existence alone and
+is never retried as a different generation without an explicit repair/import.
 
 Every mirrored row belongs to a `snapshotGeneration`. Refresh performs:
 
@@ -455,15 +558,30 @@ only `active_mode`. At minimum it covers:
 - Mini, Tools, pricing, mode, and routing settings.
 - The `/models` catalog and its pointers.
 
+Capability tiers make completeness build- and configuration-aware:
+
+- `core_serving` is mandatory for every runtime-ready snapshot.
+- `enabled_feature` is mandatory only when its corresponding feature is enabled
+  in the candidate snapshot.
+- `optional_admin` may be absent without blocking model serving, but health and
+  Admin surfaces expose the omission.
+
+H3 mirrors Helmora API-key hashes, budgets, lifecycle state, and any data needed
+for offline authentication reads. API-key creation, rotation, revocation, and
+budget mutation remain online-only and fail closed through H3. H4 is the first
+increment that enables those API-key mutations through the logical idempotent
+mutation and delivery-envelope contracts.
+
 Deletion is represented only by absence from a complete activated generation or
 an explicit pending delete operation in the local overlay.
 
 ## Credential Safety
 
-- Supabase and the local vault use distinct key identities. Remote ciphertext is
-  decrypted only inside the credential boundary and immediately re-encrypted in
-  memory with the local vault key; plaintext is never written to an intermediate
-  row, file, outbox payload, or log.
+- Decrypted remote credential material exists only transiently in memory inside
+  the credential boundary. Supabase and SQLite store only ciphertext/envelope.
+  Supabase and the local vault use distinct key identities; remote ciphertext is
+  immediately re-encrypted in memory with the local vault key and plaintext is
+  never written to an intermediate row, file, outbox payload, or log.
 - Every credential envelope carries `encryptionVersion`, `keyId`, nonce, and AAD
   derived from `entityType + entityId + credentialType + schemaVersion` so a
   provider, connector, or OAuth ciphertext cannot be substituted across
@@ -471,9 +589,9 @@ an explicit pending delete operation in the local overlay.
 - Key rotation writes a new envelope before retiring the previous key and is
   resumable by envelope version. A missing required key makes that credential
   unusable and visible in health; it never falls back to plaintext.
-- Offline Helmora client API-key creation persists only its one-time plaintext
-  response to the caller; synchronization uses a pre-hashed record or encrypted
-  transient payload, never plaintext outbox JSON.
+- H4 offline Helmora client API-key creation stores one-time plaintext only in
+  the encrypted local delivery envelope; synchronization uses a pre-hashed record
+  or encrypted transient payload, never plaintext outbox JSON.
 - Secret-bearing mirror migrations replace any legacy plaintext vault payloads
   atomically after validation.
 - Logs, health payloads, state transitions, and sync errors contain IDs and
@@ -523,6 +641,11 @@ Required tests include:
 - Supabase network/auth failure at boot uses a valid local snapshot.
 - A valid local snapshot opens HTTP readiness without waiting for the full
   Supabase timeout.
+- `/health` stays HTTP 200 for a live recovery-only process while reporting
+  `servingReady=false`; `/ready` returns HTTP 503 until serving is actually safe.
+- Generation-zero promotion rejects missing current-build core capabilities,
+  enabled-feature gaps, invalid references/decryption, untrusted legacy rows, and
+  incomplete migrations; manifest plus active pointer are atomic.
 - No-snapshot recovery accepts only the bootstrap/recovery credential and route
   allowlist; normal API keys and model routes remain unavailable.
 - Environment recovery token precedence, local-hash fallback, rate limiting,
@@ -538,8 +661,13 @@ Required tests include:
 - Missing or malformed mutation idempotency keys fail before local persistence.
 - Request fingerprints are stable across semantic retries and disclose no secret
   input or randomized ciphertext.
-- API-key plaintext delivery envelopes are local-only, actor-scoped, encrypted,
-  and expire after 10 minutes without creating a duplicate key.
+- Admin SPA retries reuse one idempotency UUID for the same logical save and
+  create a new UUID only after a terminal response or changed draft.
+- Canonical request fingerprints ignore raw JSON ordering/default noise and bind
+  method, route/action, actor, normalized body, and entity identity.
+- API-key plaintext delivery envelopes are local-only, encrypted, restart-safe,
+  bound to actor/operation/idempotency/key hash, repeatedly retrievable until the
+  10-minute expiry, never listable by key ID, and never create a duplicate key.
 - A timeout after a committed remote mutation retries the same operation ID and
   applies exactly once.
 - The write that triggers degradation stays effective locally and is queued
@@ -566,7 +694,7 @@ Required tests include:
 
 ## Rollout
 
-### H1 -- Boot survival hotfix
+### H1A -- Boot survival patch
 
 - Boot SQLite and activate a complete local snapshot before remote probing.
 - Validate a legacy mirror once and atomically promote it to generation zero;
@@ -574,14 +702,25 @@ Required tests include:
   adds full staged refresh generations. Incomplete legacy rows remain
   recovery-only rather than being assumed valid.
 - Convert Supabase/schema startup failures into degraded health.
-- Add independent, narrowly scoped recovery authentication, token rotation,
-  `.env.example`, and VPS recovery setup documentation.
 - Probe the complete active schema capability set.
-- Preserve current mutation semantics temporarily; H1 does not claim safe
+- Separate process liveness, recovery readiness, and serving readiness in the
+  HTTP contracts.
+- Preserve current mutation semantics temporarily; H1A/H1B do not claim safe
   offline writes.
 
-H1 is the urgent production recovery increment and may ship before the remaining
-replication hardening.
+H1A may release independently only when the production snapshot has been
+independently verified complete under the generation-zero algorithm and
+no-snapshot recovery is not required for that restart. Otherwise H1B is part of
+the same release gate.
+
+### H1B -- Recovery surface
+
+- Add independent, narrowly scoped recovery authentication, token rotation,
+  `.env.example`, and VPS recovery setup documentation.
+- Expose masked storage health, cache-free capability testing, and the dedicated
+  recovery storage update DTO.
+- Keep no-snapshot deployments serving-disabled while making the repair surface
+  reachable through independent recovery authentication.
 
 ### H2 -- Transactional outbox
 
