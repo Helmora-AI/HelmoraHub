@@ -29,6 +29,8 @@ export function createApp(_config: Config) {
     cors({
       origin: true,
       credentials: true,
+      maxAge: 600,
+      optionsSuccessStatus: 204,
       allowedHeaders: [
         'Accept',
         'Authorization',

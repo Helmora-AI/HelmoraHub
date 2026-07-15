@@ -168,6 +168,7 @@ describe('multi-key /v1', () => {
     expect(res.status).toBe(204);
     expect(String(res.headers['access-control-allow-headers']).toLowerCase())
       .toContain('x-helmora-tools');
+    expect(res.headers['access-control-max-age']).toBe('600');
   });
 
   it('enforces budget', async () => {

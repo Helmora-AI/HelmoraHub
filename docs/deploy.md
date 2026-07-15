@@ -289,6 +289,20 @@ Hub downloads `cloudflared` into `data/bin/` on first start if it is not on `PAT
 
 API: `GET|PUT /api/settings/tunnel`, `POST /api/settings/tunnel/start|stop`.
 
+### Rollout order for Hub + Admin SPA
+
+Deploy/restart the Hub first. Wait until both `GET /health` and `GET /api/auth/status`
+return `200` repeatedly through the public hostname, then deploy the Admin SPA. A single
+Pterodactyl instance can briefly return Cloudflare `502` while Node and `cloudflared`
+restart; the tunnel manager retries failed startup/reconnect attempts with bounded
+exponential backoff.
+
+Also verify an `OPTIONS` request from the SPA origin returns `204` with
+`Access-Control-Allow-Origin` and `Access-Control-Allow-Headers`. Hub caches successful
+preflight decisions for 10 minutes. A Cloudflare-generated `502` has no Hub CORS headers,
+so browsers may describe an unavailable tunnel as a CORS error even though Express CORS
+configuration is correct.
+
 ---
 
 ## 7. Troubleshooting
@@ -298,6 +312,7 @@ API: `GET|PUT /api/settings/tunnel`, `POST /api/settings/tunnel/start|stop`.
 | Panel health never “done” | Ensure startup done string matches log: `Helmora AI listening on` |
 | Connection refused from outside | `HELMORA_PUBLIC=1` or `HOST=0.0.0.0`; check allocation port — or use Cloudflare Tunnel and leave Hub on `127.0.0.1` |
 | Tunnel won’t start | Check token; Public Hostname must target `http://127.0.0.1:PORT`; see Hub logs for `cloudflared` |
+| Browser reports missing `Access-Control-Allow-Origin`, response is Cloudflare `502` | This is tunnel/origin unavailability, not an Express preflight rejection. Check Pterodactyl state, `cloudflared` reconnect logs, public-hostname target/port, and duplicate stale connectors. |
 | `better-sqlite3` build fail | Need Node 20 + build tools (`python3 make g++`) on install image |
 | Settings 404 | Run `npm run build` (copies `public/` into `dist/public`) |
 | Lost data after reinstall | Persist `/home/container/data` (Ptero) or Docker volume |

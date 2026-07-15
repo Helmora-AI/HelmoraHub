@@ -22,12 +22,15 @@ vi.mock('node:child_process', async () => {
 describe('token tunnel manager', () => {
   let tmpDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-tunnel-'));
     spawnMock.mockReset();
+    const { ensureCloudflared } = await import('../tunnel/cloudflared-bin.js');
+    vi.mocked(ensureCloudflared).mockClear();
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     const { stopTunnel } = await import('../tunnel/manager.js');
     await stopTunnel();
     try {
@@ -78,5 +81,82 @@ describe('token tunnel manager', () => {
     await stopTunnel();
     expect(getTunnelStatus().running).toBe(false);
     expect(child.kill).toHaveBeenCalled();
+  });
+
+  it('keeps retrying when startup and the first reconnect fail before ready', async () => {
+    vi.useFakeTimers();
+    const children = Array.from({ length: 3 }, () => {
+      const child = new EventEmitter() as EventEmitter & {
+        pid: number;
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.pid = process.pid;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      return child;
+    });
+    spawnMock
+      .mockImplementationOnce(() => children[0])
+      .mockImplementationOnce(() => children[1])
+      .mockImplementationOnce(() => children[2]);
+
+    const { startTokenTunnel, getTunnelStatus } = await import('../tunnel/manager.js');
+    const input = {
+      dataDir: tmpDir,
+      token: 'test-token',
+      localPort: 20800,
+      hostname: 'hub.example.com',
+      autoRestart: true,
+    };
+
+    const initial = startTokenTunnel(input);
+    queueMicrotask(() => children[0].emit('exit', 1));
+    await expect(initial).rejects.toThrow();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    children[1].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    children[2].stderr.emit('data', Buffer.from('Registered tunnel connection connIndex=0'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(getTunnelStatus()).toMatchObject({ running: true, lastError: null });
+  });
+
+  it('retries when cloudflared preparation fails during boot', async () => {
+    vi.useFakeTimers();
+    const { ensureCloudflared } = await import('../tunnel/cloudflared-bin.js');
+    vi.mocked(ensureCloudflared).mockRejectedValueOnce(new Error('temporary download failure'));
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.pid = process.pid;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.stderr.emit('data', Buffer.from('Registered tunnel connection connIndex=0')));
+      return child;
+    });
+
+    const { startTokenTunnel, getTunnelStatus } = await import('../tunnel/manager.js');
+    const initial = startTokenTunnel({
+      dataDir: tmpDir,
+      token: 'test-token',
+      localPort: 20800,
+      autoRestart: true,
+    });
+    await expect(initial).rejects.toThrow('temporary download failure');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ensureCloudflared).toHaveBeenCalledTimes(2);
+    expect(getTunnelStatus().running).toBe(true);
   });
 });

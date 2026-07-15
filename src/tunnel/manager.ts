@@ -27,6 +27,7 @@ type TunnelRuntime = {
   enabled: boolean;
   dataDir: string;
   restartTimer: NodeJS.Timeout | null;
+  restartAttempts: number;
   logTail: string;
 };
 
@@ -41,6 +42,7 @@ const runtime: TunnelRuntime = {
   enabled: false,
   dataDir: '',
   restartTimer: null,
+  restartAttempts: 0,
   logTail: '',
 };
 
@@ -116,19 +118,28 @@ export async function startTokenTunnel(input: StartTunnelInput): Promise<TunnelS
   runtime.hostname = input.hostname?.trim() || null;
   runtime.tokenPresent = true;
   runtime.enabled = true;
+  runtime.intentionalStop = false;
   runtime.lastError = null;
 
   if (runtime.child?.pid && isProcessAlive(runtime.child.pid)) {
     return getTunnelStatus();
   }
 
-  const binary = await ensureCloudflared(input.dataDir);
+  let binary: string;
+  try {
+    binary = await ensureCloudflared(input.dataDir);
+  } catch (error) {
+    runtime.lastError = error instanceof Error ? error.message : 'cloudflared preparation failed';
+    if (input.autoRestart !== false && runtime.enabled && !runtime.intentionalStop) {
+      scheduleRestart(input);
+    }
+    throw error;
+  }
 
   // Named tunnel with token: Cloudflare dashboard maps hostname → local service.
   // We still pass metrics-friendly flags; origin is in the token's tunnel config.
   const args = ['tunnel', '--no-autoupdate', 'run', '--token', token];
 
-  runtime.intentionalStop = false;
   runtime.logTail = '';
 
   const child = spawn(binary, args, {
@@ -193,6 +204,9 @@ export async function startTokenTunnel(input: StartTunnelInput): Promise<TunnelS
       settled = true;
       clearTimeout(timeout);
       runtime.lastError = err.message;
+      if (input.autoRestart !== false && runtime.enabled && !runtime.intentionalStop) {
+        scheduleRestart(input);
+      }
       reject(err);
     });
 
@@ -206,6 +220,9 @@ export async function startTokenTunnel(input: StartTunnelInput): Promise<TunnelS
           runtime.logTail.slice(-500) ||
           `cloudflared exited with code ${code} before ready (check token)`;
         runtime.lastError = err;
+        if (input.autoRestart !== false && runtime.enabled) {
+          scheduleRestart(input);
+        }
         reject(new Error(err));
         return;
       }
@@ -218,6 +235,8 @@ export async function startTokenTunnel(input: StartTunnelInput): Promise<TunnelS
     });
   });
 
+  runtime.restartAttempts = 0;
+  runtime.lastError = null;
   console.log(
     `[tunnel] started (pid=${child.pid}) localPort=${input.localPort}` +
       (runtime.hostname ? ` hostname=${runtime.hostname}` : '')
@@ -226,7 +245,10 @@ export async function startTokenTunnel(input: StartTunnelInput): Promise<TunnelS
 }
 
 function scheduleRestart(input: StartTunnelInput): void {
-  if (runtime.restartTimer) clearTimeout(runtime.restartTimer);
+  if (runtime.restartTimer || !runtime.enabled || runtime.intentionalStop) return;
+  runtime.restartAttempts += 1;
+  const attempt = runtime.restartAttempts;
+  const delayMs = Math.min(60_000, 5_000 * (2 ** Math.min(attempt - 1, 4)));
   runtime.restartTimer = setTimeout(() => {
     runtime.restartTimer = null;
     if (!runtime.enabled || runtime.intentionalStop) return;
@@ -234,8 +256,10 @@ function scheduleRestart(input: StartTunnelInput): void {
     startTokenTunnel(input).catch((err) => {
       console.error('[tunnel] auto-restart failed:', err);
       runtime.lastError = err instanceof Error ? err.message : String(err);
+      scheduleRestart(input);
     });
-  }, 5_000);
+  }, delayMs);
+  runtime.restartTimer.unref?.();
 }
 
 export async function stopTunnel(): Promise<TunnelStatus> {
@@ -245,6 +269,7 @@ export async function stopTunnel(): Promise<TunnelStatus> {
     clearTimeout(runtime.restartTimer);
     runtime.restartTimer = null;
   }
+  runtime.restartAttempts = 0;
 
   const child = runtime.child;
   if (child?.pid && isProcessAlive(child.pid)) {
