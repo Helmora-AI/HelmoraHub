@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import express from 'express';
 import { createApp } from '../app.js';
 import { loadConfig, setActiveConfig, type Config } from '../lib/config.js';
 import {
   hashRecoveryToken,
   hashAdminToken,
+  hashPassword,
   recoveryCredentialAvailable,
   verifyAdminTokenPlain,
   verifyRecoveryCredential,
@@ -18,6 +20,11 @@ import {
   verifyRecoverySession,
 } from '../lib/recovery-sessions.js';
 import { updateAdminConfig } from '../lib/runtime-config.js';
+import { closeStorage, initStorage } from '../storage/index.js';
+import {
+  isRecoveryRouteAllowed,
+  requireRecovery,
+} from '../middleware/requireRecovery.js';
 import request from './test-request.js';
 
 describe('recovery authentication primitives', () => {
@@ -25,7 +32,7 @@ describe('recovery authentication primitives', () => {
   let config: Config;
   let previousEnv: Record<string, string | undefined>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     previousEnv = {};
     for (const name of [
       'HELMORA_RECOVERY_TOKEN',
@@ -46,9 +53,11 @@ describe('recovery authentication primitives', () => {
     config.rateBackend = 'memory';
     config.encryptionKey = 'test-recovery-auth-encryption-key';
     setActiveConfig(config);
+    await initStorage(config);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeStorage();
     vi.useRealTimers();
     for (const [name, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[name];
@@ -130,5 +139,93 @@ describe('recovery authentication primitives', () => {
       .set('Authorization', `Bearer ${setup.body.adminToken}`);
     expect(envManaged.status).toBe(409);
     expect(envManaged.body.error.type).toBe('recovery_token_env_managed');
+  });
+
+  it('logs in with recovery scope and rejects that bearer on admin and model routes', async () => {
+    const recoveryToken = 'helmora-recovery-token-login-value';
+    updateAdminConfig(tmpDir, {
+      recoveryTokenHash: hashRecoveryToken(recoveryToken),
+      passwordHash: hashPassword('recovery-login-admin-password'),
+    });
+    const app = createApp(config);
+    const login = await request(app)
+      .post('/api/auth/recovery-login')
+      .send({ token: recoveryToken });
+    expect(login.status).toBe(200);
+    expect(login.body).toMatchObject({ ok: true, scope: 'recovery' });
+    expect(Date.parse(login.body.expiresAt) - Date.now()).toBeLessThanOrEqual(
+      15 * 60 * 1000
+    );
+
+    const admin = await request(app)
+      .get('/api/status')
+      .set('Authorization', `Bearer ${login.body.token}`);
+    expect(admin.status).toBe(401);
+    expect(admin.body.error.type).toBe('admin_unauthorized');
+
+    const model = await request(app)
+      .get('/v1/models')
+      .set('Authorization', `Bearer ${login.body.token}`);
+    expect(model.status).toBe(401);
+    expect(model.body.error.type).toBe('invalid_api_key');
+
+    const status = await request(app).get('/api/auth/status');
+    expect(status.status).toBe(200);
+    expect(status.body.recoveryAvailable).toBe(true);
+    expect(status.body.recoveryMode).toBe(false);
+  });
+
+  it('enforces the exact recovery route allowlist in middleware', async () => {
+    const session = issueRecoverySession();
+    expect(isRecoveryRouteAllowed('GET', '/api/storage/health')).toBe(true);
+    expect(isRecoveryRouteAllowed('PUT', '/api/settings/storage')).toBe(true);
+    expect(isRecoveryRouteAllowed('POST', '/api/status')).toBe(false);
+
+    const surface = express();
+    surface.get('/api/storage/health', requireRecovery, (req, res) => {
+      res.json({ scope: req.recoveryScope });
+    });
+    surface.get('/api/providers', requireRecovery, (_req, res) => {
+      res.json({ shouldNotRun: true });
+    });
+
+    const allowed = await request(surface)
+      .get('/api/storage/health')
+      .set('Authorization', `Bearer ${session.token}`);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.scope).toBe('recovery');
+
+    const denied = await request(surface)
+      .get('/api/providers')
+      .set('Authorization', `Bearer ${session.token}`);
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.type).toBe('recovery_scope_denied');
+
+    const wrongHeader = await request(surface)
+      .get('/api/storage/health')
+      .set('X-Admin-Token', session.token);
+    expect(wrongHeader.status).toBe(401);
+    expect(wrongHeader.body.error.type).toBe('recovery_unauthorized');
+  });
+
+  it('rate-limits repeated recovery login attempts', async () => {
+    const recoveryToken = 'helmora-recovery-token-rate-limit-value';
+    updateAdminConfig(tmpDir, {
+      recoveryTokenHash: hashRecoveryToken(recoveryToken),
+    });
+    const app = createApp(config);
+    let throttled = false;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await request(app)
+        .post('/api/auth/recovery-login')
+        .send({ token: 'wrong-recovery-token-value' });
+      if (response.status === 429) {
+        throttled = true;
+        expect(response.body.error.type).toBe('rate_limited');
+        break;
+      }
+      expect(response.status).toBe(401);
+    }
+    expect(throttled).toBe(true);
   });
 });

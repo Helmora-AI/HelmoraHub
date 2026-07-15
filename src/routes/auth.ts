@@ -18,6 +18,8 @@ import {
   setSessionCookie,
   verifyAdminPassword,
   recoveryCredentialEnvironmentManaged,
+  recoveryCredentialAvailable,
+  verifyRecoveryCredential,
 } from '../lib/admin-auth.js';
 import {
   issueAdminSession,
@@ -25,14 +27,21 @@ import {
 } from '../lib/admin-sessions.js';
 import { isHelSessionToken } from '../lib/hel-env.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { issueRecoverySession } from '../lib/recovery-sessions.js';
+import { getControlHealth } from '../storage/index.js';
 
 export const authRouter = Router();
 
 /** Simple in-memory rate limit for setup/login (per IP). */
 const authHits = new Map<string, { n: number; resetAt: number }>();
+const recoveryAuthHits = new Map<string, { n: number; resetAt: number }>();
+
+function authRateKey(req: Request): string {
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
 
 function rateLimitAuth(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const ip = authRateKey(req);
   const now = Date.now();
   const windowMs = 60_000;
   const max = 20;
@@ -51,10 +60,41 @@ function rateLimitAuth(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+function rateLimitRecoveryAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const ip = authRateKey(req);
+  const now = Date.now();
+  const windowMs = 15 * 60_000;
+  const max = 5;
+  let row = recoveryAuthHits.get(ip);
+  if (!row || row.resetAt < now) {
+    row = { n: 0, resetAt: now + windowMs };
+    recoveryAuthHits.set(ip, row);
+  }
+  row.n += 1;
+  if (row.n > max) {
+    res.status(429).json({
+      error: {
+        message: 'Too many recovery authentication attempts.',
+        type: 'rate_limited',
+      },
+    });
+    return;
+  }
+  next();
+}
+
 let setupLock = false;
 
 authRouter.get('/status', (req, res) => {
-  res.json(authStatusPayload(req));
+  const control = getControlHealth();
+  res.json({
+    ...authStatusPayload(req),
+    recoveryMode: control.controlPlane === 'recovery_only',
+  });
 });
 
 authRouter.post('/setup', rateLimitAuth, (req, res) => {
@@ -160,6 +200,38 @@ authRouter.post('/login', rateLimitAuth, (req, res) => {
     expiresAt: spa.expiresAt,
     auth: { ...authStatusPayload(req), authenticated: true },
   });
+});
+
+authRouter.post('/recovery-login', rateLimitRecoveryAuth, (req, res) => {
+  if (!recoveryCredentialAvailable()) {
+    res.status(503).json({
+      error: {
+        type: 'recovery_unavailable',
+        message: 'No Helmora recovery credential is configured.',
+      },
+    });
+    return;
+  }
+
+  const parsed = z.object({ token: z.string().min(16).max(512) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { type: 'validation_error', message: parsed.error.message },
+    });
+    return;
+  }
+  if (!verifyRecoveryCredential(parsed.data.token)) {
+    res.status(401).json({
+      error: {
+        type: 'recovery_unauthorized',
+        message: 'Invalid recovery credential.',
+      },
+    });
+    return;
+  }
+
+  recoveryAuthHits.delete(authRateKey(req));
+  res.json({ ok: true, ...issueRecoverySession() });
 });
 
 authRouter.post('/logout', (req, res) => {
