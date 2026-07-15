@@ -9,21 +9,41 @@ import type { ConfigStore, RateStore, StorageBundle } from './types.js';
 
 let bundle: StorageBundle | null = null;
 
-async function createConfigStore(config: Config): Promise<ConfigStore> {
+export type HybridControlClient = {
+  store: ConfigStore;
+  bootstrap: () => Promise<void>;
+};
+
+export type StorageInitDependencies = {
+  createHybridControl?: (config: Config) => HybridControlClient;
+};
+
+async function createConfigStore(
+  config: Config,
+  dependencies: StorageInitDependencies
+): Promise<ConfigStore> {
   if (config.storageBackend === 'supabase') {
-    // Local SQLite always hosts workspace + control vault mirror.
     const workspace = new SqliteConfigStore(config);
-    const supabase = new SupabaseConfigStore(config);
-    await supabase.bootstrap(config);
+    const client = dependencies.createHybridControl?.(config) ?? (() => {
+      const supabase = new SupabaseConfigStore(config);
+      return {
+        store: supabase,
+        bootstrap: () => supabase.bootstrap(config),
+      };
+    })();
+    const vault = workspace.getControlVault();
+    const snapshotAvailable =
+      vault.getActiveSnapshotManifest() != null || vault.promoteLegacyGenerationZero().ok;
     const hybrid = new HybridConfigStore({
-      control: supabase,
+      control: client.store,
       workspace,
-      vault: workspace.getControlVault(),
+      vault,
       hybrid: true,
+      initialSnapshotAvailable: snapshotAvailable,
+      bootstrapControl: client.bootstrap,
     });
-    await hybrid.refreshVaultFromControl();
     console.log(
-      '[storage] config backend: Hybrid (Supabase control + local vault/workspace)'
+      `[storage] config backend: Hybrid (local-first; snapshot=${snapshotAvailable ? 'ready' : 'unavailable'})`
     );
     return hybrid;
   }
@@ -42,14 +62,17 @@ async function createRateStore(config: Config): Promise<RateStore> {
   return new MemoryRateStore();
 }
 
-export async function initStorage(config: Config): Promise<StorageBundle> {
+export async function initStorage(
+  config: Config,
+  dependencies: StorageInitDependencies = {}
+): Promise<StorageBundle> {
   assertCloudConfig(config);
 
   if (bundle) {
     await closeStorage();
   }
 
-  const configStore = await createConfigStore(config);
+  const configStore = await createConfigStore(config, dependencies);
   const rateStore = await createRateStore(config);
 
   bundle = { config: configStore, rate: rateStore };
@@ -74,7 +97,22 @@ export function getConfigStore(): ConfigStore {
 export function getControlHealth(): ControlHealthSnapshot {
   const store = getConfigStore();
   if (store instanceof HybridConfigStore) return store.getControlHealth();
-  return { controlPlane: 'online', vault: 'fresh', outboxPending: 0 };
+  return {
+    controlPlane: 'online',
+    vault: 'fresh',
+    outboxPending: 0,
+    snapshotAvailable: true,
+    servingReady: true,
+    recoveryReady: false,
+    degradedReason: null,
+    degradedCapability: null,
+  };
+}
+
+export async function startControlPlaneProbe(): Promise<ControlHealthSnapshot> {
+  const store = getConfigStore();
+  if (store instanceof HybridConfigStore) return store.startControlProbe();
+  return getControlHealth();
 }
 
 export function getRateStore(): RateStore {

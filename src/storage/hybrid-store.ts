@@ -25,7 +25,9 @@ import type {
 } from '../models/types.js';
 import {
   createControlPlane,
+  createHybridBootPlane,
   finishReconcile,
+  recordControlProbeFailure,
   recordRemoteFailure,
   recordRemoteSuccess,
   toControlHealth,
@@ -35,6 +37,7 @@ import {
   type ControlOutboxOp,
   type ControlPlaneSnapshot,
 } from './control-plane.js';
+import { isDegradableSupabaseControlError } from '../lib/supabase-schema.js';
 import type { ControlVault } from './control-vault.js';
 import type { SqliteConfigStore } from './sqlite-store.js';
 import type {
@@ -68,6 +71,8 @@ export type HybridConfigStoreOptions = {
   workspace: SqliteConfigStore;
   vault: ControlVault;
   hybrid: boolean;
+  initialSnapshotAvailable?: boolean;
+  bootstrapControl?: () => Promise<void>;
 };
 
 function applyProviderPatch(existing: ProviderToggle, patch: ProviderPatch): ProviderToggle {
@@ -100,6 +105,8 @@ export class HybridConfigStore implements ConfigStore {
   private readonly vault: ControlVault;
   private readonly hybrid: boolean;
   private plane: ControlPlaneSnapshot;
+  private readonly bootstrapControl: (() => Promise<void>) | null;
+  private controlProbeInFlight: Promise<ControlHealthSnapshot> | null = null;
   /** Ensures outbox replay order when several ops share the same wall-clock ms. */
   private lastOutboxCreatedAt = 0;
 
@@ -109,7 +116,11 @@ export class HybridConfigStore implements ConfigStore {
     this.vault = opts.vault;
     this.hybrid = opts.hybrid;
     this.backend = opts.hybrid ? opts.control.backend : 'sqlite';
-    this.plane = createControlPlane();
+    this.plane =
+      opts.initialSnapshotAvailable === undefined
+        ? createControlPlane()
+        : createHybridBootPlane(opts.initialSnapshotAvailable);
+    this.bootstrapControl = opts.bootstrapControl ?? null;
   }
 
   setControlForTests(control: ConfigStore): void {
@@ -140,8 +151,55 @@ export class HybridConfigStore implements ConfigStore {
   private useVaultReads(): boolean {
     return (
       this.hybrid &&
-      (this.plane.state === 'degraded' || this.plane.state === 'reconciling')
+      (this.plane.state === 'recovery_only' ||
+        this.plane.state === 'probing' ||
+        this.plane.state === 'degraded' ||
+        this.plane.state === 'reconciling')
     );
+  }
+
+  async startControlProbe(): Promise<ControlHealthSnapshot> {
+    if (!this.hybrid) return this.getControlHealth();
+    if (this.controlProbeInFlight) return this.controlProbeInFlight;
+
+    this.controlProbeInFlight = (async () => {
+      try {
+        await this.bootstrapControl?.();
+        await this.pullControlIntoVault();
+
+        let manifest = this.vault.getActiveSnapshotManifest();
+        if (!manifest) {
+          const promotion = this.vault.promoteLegacyGenerationZero();
+          if (promotion.ok) manifest = promotion.manifest;
+        }
+        if (!manifest) {
+          this.plane = {
+            ...this.plane,
+            state: 'recovery_only',
+            snapshotAvailable: false,
+            vault: 'stale',
+            degradedReason: 'remote_error',
+            degradedCapability: null,
+            lastProbeAt: Date.now(),
+          };
+          return this.getControlHealth();
+        }
+
+        this.plane = { ...this.plane, snapshotAvailable: true };
+        this.plane = recordRemoteSuccess(this.plane, Date.now());
+        if (this.plane.state === 'reconciling') {
+          this.plane = finishReconcile(this.plane, Date.now());
+        }
+        return this.getControlHealth();
+      } catch (error) {
+        if (!isDegradableSupabaseControlError(error)) throw error;
+        this.plane = recordControlProbeFailure(this.plane, Date.now(), error);
+        return this.getControlHealth();
+      } finally {
+        this.controlProbeInFlight = null;
+      }
+    })();
+    return this.controlProbeInFlight;
   }
 
   private assertNotReconciling(): void {

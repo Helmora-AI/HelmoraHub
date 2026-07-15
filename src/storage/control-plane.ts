@@ -1,9 +1,16 @@
 /** Pure control-plane state machine + outbox helpers (no I/O). */
 
+import type { SupabaseControlFailureCode } from '../lib/supabase-schema.js';
+
 export const CONTROL_PROBE_INTERVAL_MS = 15_000;
 export const CONTROL_FAILURES_TO_DEGRADED = 2;
 
-export type ControlPlaneState = 'online' | 'degraded' | 'reconciling';
+export type ControlPlaneState =
+  | 'recovery_only'
+  | 'probing'
+  | 'online'
+  | 'degraded'
+  | 'reconciling';
 export type ControlVaultHealth = 'fresh' | 'stale' | 'replaying';
 
 export type ControlOutboxEntity =
@@ -32,12 +39,20 @@ export type ControlPlaneSnapshot = {
   lastFailureAt: number | null;
   lastSuccessAt: number | null;
   lastProbeAt: number | null;
+  snapshotAvailable: boolean;
+  degradedReason: SupabaseControlFailureCode | null;
+  degradedCapability: string | null;
 };
 
 export type ControlHealthSnapshot = {
   controlPlane: ControlPlaneState;
   vault: ControlVaultHealth;
   outboxPending: number;
+  snapshotAvailable: boolean;
+  servingReady: boolean;
+  recoveryReady: boolean;
+  degradedReason: SupabaseControlFailureCode | null;
+  degradedCapability: string | null;
 };
 
 export function createControlPlane(
@@ -50,6 +65,9 @@ export function createControlPlane(
     lastFailureAt: null,
     lastSuccessAt: null,
     lastProbeAt: null,
+    snapshotAvailable: true,
+    degradedReason: null,
+    degradedCapability: null,
     ...over,
   };
 }
@@ -62,6 +80,36 @@ export function toControlHealth(
     controlPlane: plane.state,
     vault: plane.vault,
     outboxPending,
+    snapshotAvailable: plane.snapshotAvailable,
+    servingReady: plane.snapshotAvailable,
+    recoveryReady: false,
+    degradedReason: plane.degradedReason,
+    degradedCapability: plane.degradedCapability,
+  };
+}
+
+export function createHybridBootPlane(snapshotAvailable: boolean): ControlPlaneSnapshot {
+  return createControlPlane({
+    state: snapshotAvailable ? 'probing' : 'recovery_only',
+    vault: snapshotAvailable ? 'fresh' : 'stale',
+    snapshotAvailable,
+  });
+}
+
+export function recordControlProbeFailure(
+  plane: ControlPlaneSnapshot,
+  nowMs: number,
+  failure: { code: SupabaseControlFailureCode; capability: string | null }
+): ControlPlaneSnapshot {
+  return {
+    ...plane,
+    state: plane.snapshotAvailable ? 'degraded' : 'recovery_only',
+    vault: plane.snapshotAvailable ? 'stale' : plane.vault,
+    failureCount: plane.failureCount + 1,
+    lastFailureAt: nowMs,
+    lastProbeAt: nowMs,
+    degradedReason: failure.code,
+    degradedCapability: failure.capability,
   };
 }
 
@@ -125,12 +173,27 @@ export function recordRemoteSuccess(
     };
   }
 
+  if (plane.state === 'probing' || plane.state === 'recovery_only') {
+    return {
+      ...plane,
+      state: plane.snapshotAvailable ? 'online' : plane.state,
+      vault: plane.snapshotAvailable ? 'fresh' : plane.vault,
+      failureCount: 0,
+      lastSuccessAt: nowMs,
+      lastProbeAt: nowMs,
+      degradedReason: null,
+      degradedCapability: null,
+    };
+  }
+
   return {
     ...plane,
     failureCount: 0,
     vault: 'fresh',
     lastSuccessAt: nowMs,
     lastProbeAt: nowMs,
+    degradedReason: null,
+    degradedCapability: null,
   };
 }
 
@@ -146,6 +209,8 @@ export function finishReconcile(
     failureCount: 0,
     lastSuccessAt: nowMs,
     lastProbeAt: nowMs,
+    degradedReason: null,
+    degradedCapability: null,
   };
 }
 
