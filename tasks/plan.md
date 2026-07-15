@@ -319,14 +319,16 @@ Canonical bounded tool loop
 **Description:** Replace the Task 7 activity shell with real connector-test state and recent safe activity data from Task 10A.
 
 **Acceptance criteria:**
-- [ ] Test action shows running/success/throttled/credentials-required/failure states without exposing raw upstream data.
-- [ ] Recent activity supports bounded loading and completed/throttled/failed filters.
-- [ ] Empty and degraded states remain accessible and do not rely on color alone.
+- [x] Test action shows running/success/throttled/credentials-required/failure states without exposing raw upstream data.
+- [x] Recent activity supports bounded loading and completed/throttled/failed filters.
+- [x] Empty and degraded states remain accessible and do not rely on color alone.
 
 **Verification:**
-- [ ] `npm.cmd run lint`
-- [ ] `npm.cmd run build`
-- [ ] Browser smoke for test and recent-activity states
+- [x] `npm.cmd run lint`
+- [x] `npm.cmd run build`
+- [x] Browser smoke for test and recent-activity states
+
+Chrome CDP smoke verified the TinyFish connectivity test against a fresh credential (9 sources), completed and failed activity filters, masked credential display, desktop/mobile layouts, and no horizontal overflow.
 
 **Dependencies:** Tasks 7 and 10A
 
@@ -350,17 +352,17 @@ Canonical bounded tool loop
 **Description:** Implement the exact `X-Helmora-Tools: off|auto|force` wire contract, surface defaults, deterministic bilingual relevance gating, scope projection, CORS preflight support, and explicit rejection of client-supplied OpenAI tools/tool messages.
 
 **Acceptance criteria:**
-- [ ] Ordinary `auto` turns skip planning; freshness/research/search/URL intent reaches planning without granting execution authority.
-- [ ] Mini/Playground and explicit-route defaults match the spec; `off` always wins.
-- [ ] The administrative kill switch is evaluated first: disabled runtime always resolves `off`, including when the header is `force`.
-- [ ] Remaining order is valid request override or surface default → tool scope/eligibility → `auto` relevance gate → schema/policy authorization; any other header value returns HTTP 400 `invalid_tools_policy`.
-- [ ] `force` bypasses only relevance and cannot enable the runtime, broaden scope, or bypass policy.
-- [ ] Approved browser origins can send `X-Helmora-Tools`, and route tests assert the preflight allow-header response.
-- [ ] Client-defined tools are rejected as `client_tools_unsupported` rather than forwarded or ignored.
+- [x] Ordinary `auto` turns skip planning; freshness/research/search/URL intent reaches planning without granting execution authority.
+- [x] Mini/Playground and explicit-route defaults match the spec; `off` always wins.
+- [x] The administrative kill switch is evaluated first: disabled runtime always resolves `off`, including when the header is `force`.
+- [x] Remaining order is valid request override or surface default → tool scope/eligibility → `auto` relevance gate → schema/policy authorization; any other header value returns HTTP 400 `invalid_tools_policy`.
+- [x] `force` bypasses only relevance and cannot enable the runtime, broaden scope, or bypass policy.
+- [x] Approved browser origins can send `X-Helmora-Tools`, and route tests assert the preflight allow-header response.
+- [x] Client-defined tools are rejected as `client_tools_unsupported` rather than forwarded or ignored.
 
 **Verification:**
-- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-policy.test.ts`
-- [ ] Existing Mini classifier/router tests pass
+- [x] RED then GREEN: `npm.cmd test -- src/__tests__/tool-policy.test.ts`
+- [x] Existing Mini classifier/router tests pass
 
 **Dependencies:** Tasks 2 and 5
 

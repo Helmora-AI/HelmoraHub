@@ -33,6 +33,11 @@ import { resolveRouteIdentity, prepareUpstreamMessages } from '../services/ident
 import { resolveMiniRuntimeAttempts } from '../services/mini-route.js';
 import { classifyMiniIntent } from '../services/mini-classifier.js';
 import { mountChatHistoryRoutes } from './chat-history.js';
+import { getToolRuntimeConfig } from '../services/tool-config.js';
+import {
+  buildToolRequestContext,
+  parseToolsHeader,
+} from '../services/tool-request-policy.js';
 
 export const chatRouter = Router();
 chatRouter.use(requireAdminSession);
@@ -318,6 +323,23 @@ chatRouter.post('/completions', async (req, res, next) => {
     }
 
     const body = parsed.data;
+    const toolsHeader = parseToolsHeader(req.header('x-helmora-tools'));
+    if (!toolsHeader.ok) {
+      res.status(400).json({
+        error: {
+          message: 'Invalid X-Helmora-Tools header. Use off|auto|force, or omit.',
+          type: 'invalid_tools_policy',
+        },
+      });
+      return;
+    }
+    res.locals.helmoraTools = buildToolRequestContext({
+      config: await getToolRuntimeConfig(),
+      model: body.model,
+      source: 'admin_chat',
+      requestHeader: toolsHeader.value,
+      messages: body.messages,
+    });
     const resolved = await resolveChatModel(body.model, body.thinking, body.messages);
     if (!resolved.ok) {
       res.status(resolved.status).json({

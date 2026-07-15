@@ -29,6 +29,18 @@ export function createApp(_config: Config) {
     cors({
       origin: true,
       credentials: true,
+      allowedHeaders: [
+        'Accept',
+        'Authorization',
+        'Content-Type',
+        'X-Admin-Token',
+        'X-API-Key',
+        'X-Ctrl-Mode',
+        'X-CtrlHub-Mode',
+        'X-Helmora-Identity',
+        'X-Helmora-Mode',
+        'X-Helmora-Tools',
+      ],
       exposedHeaders: [
         'X-Helmora-Identity',
         'X-Helmora-Mini-Role',

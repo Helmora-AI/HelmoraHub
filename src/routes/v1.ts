@@ -42,6 +42,12 @@ import {
   resolveMiniRuntimeAttempts,
 } from '../services/mini-route.js';
 import { classifyMiniIntent } from '../services/mini-classifier.js';
+import { getToolRuntimeConfig } from '../services/tool-config.js';
+import {
+  buildToolRequestContext,
+  hasUnsupportedClientTools,
+  parseToolsHeader,
+} from '../services/tool-request-policy.js';
 
 export const v1Router = Router();
 
@@ -218,7 +224,35 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       return;
     }
 
+    if (hasUnsupportedClientTools(req.body)) {
+      res.status(400).json({
+        error: {
+          message: 'Client-defined tools, tool_choice, and tool-role messages are not supported yet.',
+          type: 'client_tools_unsupported',
+        },
+      });
+      return;
+    }
+
+    const toolsHeader = parseToolsHeader(req.header('x-helmora-tools'));
+    if (!toolsHeader.ok) {
+      res.status(400).json({
+        error: {
+          message: 'Invalid X-Helmora-Tools header. Use off|auto|force, or omit.',
+          type: 'invalid_tools_policy',
+        },
+      });
+      return;
+    }
+
     const body = parsed.data;
+    res.locals.helmoraTools = buildToolRequestContext({
+      config: await getToolRuntimeConfig(),
+      model: body.model ?? 'auto',
+      source: 'api',
+      requestHeader: toolsHeader.value,
+      messages: body.messages,
+    });
     const headerMode =
       req.header('x-helmora-mode') ??
       req.header('x-ctrl-mode') ??

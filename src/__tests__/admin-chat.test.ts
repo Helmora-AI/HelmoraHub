@@ -24,7 +24,10 @@ beforeAll(async () => {
   process.env.STORAGE_BACKEND = 'local';
   process.env.RATE_BACKEND = 'memory';
   delete process.env.HELMORA_API_KEY;
+  delete process.env.HELMORA_ADMIN_PASSWORD;
   delete process.env.HELMORA_ADMIN_TOKEN;
+  delete process.env.CTRLHUB_ADMIN_PASSWORD;
+  delete process.env.CTRLHUB_ADMIN_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -39,6 +42,8 @@ beforeAll(async () => {
   const setup = await request(app)
     .post('/api/auth/setup')
     .send({ password: 'chat-admin-password' });
+  expect(setup.status).toBe(200);
+  expect(setup.body.token).toMatch(/^helmora_session_/);
   spaToken = setup.body.token;
   adminToken = setup.body.adminToken;
   v1Key = await getConfigStore().getUnifiedApiKey();
@@ -82,6 +87,20 @@ afterAll(async () => {
 });
 
 describe('POST /api/chat/completions', () => {
+  it('rejects an invalid Helmora tool policy before model resolution', async () => {
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .set('X-Helmora-Tools', 'enabled')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: false,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error.type).toBe('invalid_tools_policy');
+  });
+
   it('rejects /v1 consumer key', async () => {
     const res = await request(app)
       .post('/api/chat/completions')

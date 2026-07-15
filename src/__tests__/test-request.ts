@@ -45,6 +45,12 @@ class TestRequest {
     return this;
   }
 
+  options(path: string) {
+    this.method = 'OPTIONS';
+    this.path = path;
+    return this;
+  }
+
   set(key: string, value: string) {
     this.headers[key.toLowerCase()] = value;
     return this;

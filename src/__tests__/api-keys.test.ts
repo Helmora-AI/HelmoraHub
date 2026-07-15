@@ -22,7 +22,10 @@ beforeAll(async () => {
   process.env.STORAGE_BACKEND = 'local';
   process.env.RATE_BACKEND = 'memory';
   delete process.env.HELMORA_API_KEY;
+  delete process.env.HELMORA_ADMIN_PASSWORD;
   delete process.env.HELMORA_ADMIN_TOKEN;
+  delete process.env.CTRLHUB_ADMIN_PASSWORD;
+  delete process.env.CTRLHUB_ADMIN_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -47,6 +50,7 @@ beforeAll(async () => {
   const setup = await request(app)
     .post('/api/auth/setup')
     .send({ password: 'keys-admin-password' });
+  expect(setup.status).toBe(200);
   adminToken = setup.body.adminToken;
 
   const created = await request(app)
@@ -117,6 +121,53 @@ describe('multi-key /v1', () => {
       });
     expect(res.status).toBe(200);
     expect(res.headers['x-ctrl-meta-model']).toBe('helmora-mini-1.0');
+  });
+
+  it('rejects invalid Helmora tool policy before routing', async () => {
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${clientKey}`)
+      .set('X-Helmora-Tools', 'always')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error.type).toBe('invalid_tools_policy');
+  });
+
+  it('rejects client-defined tools and tool-role messages explicitly', async () => {
+    const definition = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${clientKey}`)
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: [],
+      });
+    expect(definition.status).toBe(400);
+    expect(definition.body.error.type).toBe('client_tools_unsupported');
+
+    const toolMessage = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${clientKey}`)
+      .send({
+        model: 'auto',
+        messages: [{ role: 'tool', content: 'untrusted result' }],
+      });
+    expect(toolMessage.status).toBe(400);
+    expect(toolMessage.body.error.type).toBe('client_tools_unsupported');
+  });
+
+  it('allows X-Helmora-Tools in browser preflight', async () => {
+    const res = await request(app)
+      .options('/v1/chat/completions')
+      .set('Origin', 'https://admin.example')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'authorization,content-type,x-helmora-tools');
+    expect(res.status).toBe(204);
+    expect(String(res.headers['access-control-allow-headers']).toLowerCase())
+      .toContain('x-helmora-tools');
   });
 
   it('enforces budget', async () => {
