@@ -34,6 +34,9 @@ export const LEGACY_ADMIN_TOKEN_PREFIX = 'ctrlhub-admin-';
 export const HEL_SESSION_PREFIX = 'helmora_session_';
 export const LEGACY_SESSION_PREFIX = 'ctrlhub_session_';
 
+export const HEL_RECOVERY_TOKEN_PREFIX = 'helmora-recovery-token-';
+export const HEL_RECOVERY_SESSION_PREFIX = 'helmora_recovery_session_';
+
 export const HEL_COOKIE_NAME = 'helmora_sid';
 export const LEGACY_COOKIE_NAME = 'ctrlhub_sid';
 
@@ -54,6 +57,14 @@ export function isHelSessionToken(token: string): boolean {
   return (
     token.startsWith(HEL_SESSION_PREFIX) || token.startsWith(LEGACY_SESSION_PREFIX)
   );
+}
+
+export function isHelRecoveryToken(token: string): boolean {
+  return token.startsWith(HEL_RECOVERY_TOKEN_PREFIX);
+}
+
+export function isHelRecoverySessionToken(token: string): boolean {
+  return token.startsWith(HEL_RECOVERY_SESSION_PREFIX);
 }
 
 export function isHelClientApiKey(token: string): boolean {

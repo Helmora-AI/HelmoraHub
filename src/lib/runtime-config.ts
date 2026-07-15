@@ -19,6 +19,7 @@ export interface AdminAuthConfig {
   passwordHash: string | null;
   adminTokenHash: string | null;
   sessionSecret: string | null;
+  recoveryTokenHash: string | null;
 }
 
 export interface RuntimeConfigFile {
@@ -43,6 +44,7 @@ export const DEFAULT_ADMIN_CONFIG: AdminAuthConfig = {
   passwordHash: null,
   adminTokenHash: null,
   sessionSecret: null,
+  recoveryTokenHash: null,
 };
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigFile = {
@@ -86,6 +88,8 @@ function parseAdmin(raw: unknown): AdminAuthConfig {
     passwordHash: typeof a.passwordHash === 'string' ? a.passwordHash : null,
     adminTokenHash: typeof a.adminTokenHash === 'string' ? a.adminTokenHash : null,
     sessionSecret: typeof a.sessionSecret === 'string' ? a.sessionSecret : null,
+    recoveryTokenHash:
+      typeof a.recoveryTokenHash === 'string' ? a.recoveryTokenHash : null,
   };
 }
 
@@ -184,6 +188,9 @@ export function maskRuntimeConfig(cfg: RuntimeConfigFile) {
     admin: {
       configured: Boolean(cfg.admin.passwordHash || helEnv('ADMIN_PASSWORD')),
       hasAdminToken: Boolean(cfg.admin.adminTokenHash || helEnv('ADMIN_TOKEN')),
+      recoveryAvailable: Boolean(
+        helEnv('RECOVERY_TOKEN') || cfg.admin.recoveryTokenHash
+      ),
     },
   };
 }

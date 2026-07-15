@@ -10,11 +10,14 @@ import {
   createSessionToken,
   extractAdminToken,
   generateAdminToken,
+  generateRecoveryToken,
+  hashRecoveryToken,
   hashAdminToken,
   hashPassword,
   isSetupRequired,
   setSessionCookie,
   verifyAdminPassword,
+  recoveryCredentialEnvironmentManaged,
 } from '../lib/admin-auth.js';
 import {
   issueAdminSession,
@@ -91,11 +94,15 @@ authRouter.post('/setup', rateLimitAuth, (req, res) => {
     const config = getActiveConfig();
     const plainToken = parsed.data.adminToken?.trim() || generateAdminToken();
     const sessionSecret = randomBytes(32).toString('hex');
+    const recoveryToken = recoveryCredentialEnvironmentManaged()
+      ? null
+      : generateRecoveryToken();
 
     updateAdminConfig(config.dataDir, {
       passwordHash: hashPassword(parsed.data.password),
       adminTokenHash: hashAdminToken(plainToken),
       sessionSecret,
+      recoveryTokenHash: recoveryToken ? hashRecoveryToken(recoveryToken) : null,
     });
 
     const cookieSession = createSessionToken();
@@ -108,6 +115,9 @@ authRouter.post('/setup', rateLimitAuth, (req, res) => {
       token: spa.token,
       expiresAt: spa.expiresAt,
       adminToken: plainToken,
+      ...(recoveryToken
+        ? { recoveryToken }
+        : { recoveryTokenEnvManaged: true }),
       auth: { ...authStatusPayload(req), authenticated: true, setupRequired: false },
     });
   } finally {
@@ -181,6 +191,25 @@ authRouter.post('/rotate-token', requireAdmin, (req, res) => {
     adminToken: plainToken,
     auth: authStatusPayload(req),
   });
+});
+
+authRouter.post('/rotate-recovery-token', requireAdmin, (_req, res) => {
+  if (recoveryCredentialEnvironmentManaged()) {
+    res.status(409).json({
+      error: {
+        message: 'The recovery token is managed by HELMORA_RECOVERY_TOKEN.',
+        type: 'recovery_token_env_managed',
+      },
+    });
+    return;
+  }
+
+  const config = getActiveConfig();
+  const recoveryToken = generateRecoveryToken();
+  updateAdminConfig(config.dataDir, {
+    recoveryTokenHash: hashRecoveryToken(recoveryToken),
+  });
+  res.json({ ok: true, recoveryToken });
 });
 
 authRouter.put('/password', requireAdmin, (req, res) => {

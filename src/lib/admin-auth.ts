@@ -11,7 +11,10 @@ import {
   helEnv,
   HEL_ADMIN_TOKEN_PREFIX,
   HEL_COOKIE_NAME,
+  HEL_RECOVERY_TOKEN_PREFIX,
   LEGACY_COOKIE_NAME,
+  isHelRecoverySessionToken,
+  isHelRecoveryToken,
   isHelSessionToken,
 } from './hel-env.js';
 import {
@@ -34,6 +37,54 @@ export function generateAdminToken(): string {
 
 export function hashAdminToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+export function generateRecoveryToken(): string {
+  return `${HEL_RECOVERY_TOKEN_PREFIX}${randomBytes(32).toString('hex')}`;
+}
+
+export function hashRecoveryToken(token: string): string {
+  return createHash('sha256').update(token.trim(), 'utf8').digest('hex');
+}
+
+function equalHexHash(actual: string, expected: string): boolean {
+  try {
+    const a = Buffer.from(actual, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    if (a.length !== 32 || b.length !== 32) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+export function recoveryCredentialEnvironmentManaged(): boolean {
+  return Boolean(helEnv('RECOVERY_TOKEN'));
+}
+
+export function recoveryCredentialAvailable(): boolean {
+  if (recoveryCredentialEnvironmentManaged()) return true;
+  return Boolean(getAdminAuthConfig().recoveryTokenHash);
+}
+
+export function isRecoveryCredentialToken(token: string): boolean {
+  const trimmed = token.trim();
+  if (!trimmed) return false;
+  if (isHelRecoveryToken(trimmed) || isHelRecoverySessionToken(trimmed)) return true;
+  const fromEnv = helEnv('RECOVERY_TOKEN');
+  if (!fromEnv) return false;
+  return equalHexHash(hashRecoveryToken(trimmed), hashRecoveryToken(fromEnv));
+}
+
+export function verifyRecoveryCredential(token: string): boolean {
+  const trimmed = token.trim();
+  if (!trimmed) return false;
+  const actual = hashRecoveryToken(trimmed);
+  const fromEnv = helEnv('RECOVERY_TOKEN');
+  if (fromEnv) return equalHexHash(actual, hashRecoveryToken(fromEnv));
+
+  const expected = getAdminAuthConfig().recoveryTokenHash;
+  return expected ? equalHexHash(actual, expected) : false;
 }
 
 export function hashPassword(password: string): string {
@@ -88,6 +139,9 @@ export function verifyAdminPassword(password: string): boolean {
 export function verifyAdminTokenPlain(token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) return false;
+  if (isRecoveryCredentialToken(trimmed) || verifyRecoveryCredential(trimmed)) {
+    return false;
+  }
 
   const fromEnv = helEnv('ADMIN_TOKEN');
   if (fromEnv && timingSafeEqualString(trimmed, fromEnv)) return true;
@@ -239,6 +293,7 @@ export function authStatusPayload(req: Request) {
     hasAdminToken: Boolean(admin.adminTokenHash || helEnv('ADMIN_TOKEN')),
     envPassword: Boolean(helEnv('ADMIN_PASSWORD')),
     envAdminToken: Boolean(helEnv('ADMIN_TOKEN')),
+    recoveryAvailable: recoveryCredentialAvailable(),
   };
 }
 

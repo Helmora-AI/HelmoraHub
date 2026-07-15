@@ -4,6 +4,7 @@ import { helEnv } from '../lib/hel-env.js';
 import { getConfigStore } from '../storage/index.js';
 import type { ApiKeyRecord } from '../keys/types.js';
 import { hashApiKey } from '../keys/generate.js';
+import { isRecoveryCredentialToken } from '../lib/admin-auth.js';
 
 export type ApiKeyAuthContext = {
   apiKey: ApiKeyRecord;
@@ -32,6 +33,16 @@ export async function requireApiKey(
         error: {
           message:
             'Invalid or missing API key. Use Authorization: Bearer hel_dev_… or hel_pro_…',
+          type: 'invalid_api_key',
+        },
+      });
+      return;
+    }
+
+    if (isRecoveryCredentialToken(token)) {
+      res.status(401).json({
+        error: {
+          message: 'Recovery credentials cannot authenticate model requests.',
           type: 'invalid_api_key',
         },
       });

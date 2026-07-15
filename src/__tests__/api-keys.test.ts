@@ -111,6 +111,23 @@ describe('multi-key /v1', () => {
     expect(res.headers['x-ctrl-key-env']).toBe('dev');
   });
 
+  it('never accepts a recovery credential as a model API key', async () => {
+    process.env.HELMORA_RECOVERY_TOKEN = clientKey;
+    try {
+      const res = await request(app)
+        .post('/v1/chat/completions')
+        .set('Authorization', `Bearer ${clientKey}`)
+        .send({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: 'hello' }],
+        });
+      expect(res.status).toBe(401);
+      expect(res.body.error.type).toBe('invalid_api_key');
+    } finally {
+      delete process.env.HELMORA_RECOVERY_TOKEN;
+    }
+  });
+
   it('meta model sets header', async () => {
     const res = await request(app)
       .post('/v1/chat/completions')
