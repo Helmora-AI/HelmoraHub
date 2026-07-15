@@ -10,6 +10,35 @@ export const SUPABASE_SCHEMA_APPLY_HINT =
 
 const SCHEMA_FILE_NAME = 'supabase-schema.sql';
 
+export type SupabaseControlFailureCode =
+  | 'schema_incomplete'
+  | 'unauthorized'
+  | 'throttled'
+  | 'timeout'
+  | 'unreachable'
+  | 'remote_unavailable'
+  | 'remote_error';
+
+export class SupabaseControlError extends Error {
+  readonly degradable = true;
+
+  constructor(
+    readonly operation: string,
+    readonly code: SupabaseControlFailureCode,
+    readonly capability: string | null,
+    message: string
+  ) {
+    super(message);
+    this.name = 'SupabaseControlError';
+  }
+}
+
+export function isDegradableSupabaseControlError(
+  error: unknown
+): error is SupabaseControlError {
+  return error instanceof SupabaseControlError && error.degradable;
+}
+
 /**
  * Resolve schema SQL for both `tsx src/` and `node dist/` (cwd + module-relative).
  * Docker runtime copies `sql/` next to the app root.
@@ -63,16 +92,82 @@ export function isSupabaseMissingTableError(message: string): boolean {
   );
 }
 
+function missingCapability(message: string): string | null {
+  const helmoraTable = message.match(/\b(helmora_[a-z0-9_]+)\b/i);
+  if (helmoraTable?.[1]) return helmoraTable[1].toLowerCase();
+  const relation = message.match(/relation\s+["'](?:public\.)?([^"']+)["']/i);
+  return relation?.[1]?.toLowerCase() ?? null;
+}
+
+function classifySupabaseControlFailure(message: string): SupabaseControlFailureCode {
+  const normalized = message.toLowerCase();
+  if (isSupabaseMissingTableError(message)) return 'schema_incomplete';
+  if (
+    normalized.includes('401') ||
+    normalized.includes('403') ||
+    normalized.includes('unauthorized') ||
+    normalized.includes('forbidden') ||
+    normalized.includes('jwt') ||
+    normalized.includes('invalid api key')
+  ) {
+    return 'unauthorized';
+  }
+  if (
+    normalized.includes('429') ||
+    normalized.includes('too many requests') ||
+    normalized.includes('rate limit')
+  ) {
+    return 'throttled';
+  }
+  if (
+    normalized.includes('timed out') ||
+    normalized.includes('timeout') ||
+    normalized.includes('aborterror')
+  ) {
+    return 'timeout';
+  }
+  if (
+    normalized.includes('fetch failed') ||
+    normalized.includes('network') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('enotfound') ||
+    normalized.includes('socket')
+  ) {
+    return 'unreachable';
+  }
+  if (
+    /\b5\d\d\b/.test(normalized) ||
+    normalized.includes('service unavailable') ||
+    normalized.includes('bad gateway')
+  ) {
+    return 'remote_unavailable';
+  }
+  return 'remote_error';
+}
+
 /** Enrich Supabase PostgREST errors when control-plane tables were never applied. */
-export function formatSupabaseControlError(operation: string, message: string): Error {
-  if (isSupabaseMissingTableError(message)) {
-    return new Error(
-      `Supabase ${operation}: control-plane tables missing (${message}). ` +
+export function formatSupabaseControlError(
+  operation: string,
+  message: string
+): SupabaseControlError {
+  const code = classifySupabaseControlFailure(message);
+  const capability = code === 'schema_incomplete' ? missingCapability(message) : null;
+  if (code === 'schema_incomplete') {
+    return new SupabaseControlError(
+      operation,
+      code,
+      capability,
+      `Supabase ${operation}: control-plane capability ${capability ?? 'unknown'} is missing. ` +
         `Apply ${SUPABASE_SCHEMA_REL_PATH} in the Supabase SQL Editor first ` +
         `(or GET /api/settings/storage/schema). ${SUPABASE_SCHEMA_APPLY_HINT}`
     );
   }
-  return new Error(`Supabase ${operation}: ${message}`);
+  return new SupabaseControlError(
+    operation,
+    code,
+    null,
+    `Supabase ${operation}: ${code}`
+  );
 }
 
 export function supabaseSchemaApiHints() {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatSupabaseControlError,
+  isDegradableSupabaseControlError,
   isSupabaseMissingTableError,
   readSupabaseSchemaSql,
+  SupabaseControlError,
   supabaseSchemaApiHints,
 } from '../lib/supabase-schema.js';
 
@@ -19,12 +21,39 @@ describe('supabase-schema helpers', () => {
 
   it('enriches missing-table errors with apply instructions', () => {
     const err = formatSupabaseControlError(
-      'getSetting',
-      "Could not find the table 'public.helmora_settings' in the schema cache"
+      'getConnectorCredentialRecord',
+      "Could not find the table 'public.helmora_connector_credentials' in the schema cache"
     );
+    expect(err).toBeInstanceOf(SupabaseControlError);
+    expect(err).toMatchObject({
+      code: 'schema_incomplete',
+      operation: 'getConnectorCredentialRecord',
+      capability: 'helmora_connector_credentials',
+      degradable: true,
+    });
     expect(err.message).toContain('sql/supabase-schema.sql');
-    expect(err.message).toContain('getSetting');
+    expect(err.message).toContain('getConnectorCredentialRecord');
     expect(err.message).toContain('/api/settings/storage/schema');
+  });
+
+  it.each([
+    ['JWT expired: service_role_secret_should_not_leak', 'unauthorized'],
+    ['HTTP 429 Too Many Requests', 'throttled'],
+    ['request timed out after 10000ms', 'timeout'],
+    ['TypeError: fetch failed ECONNREFUSED 127.0.0.1', 'unreachable'],
+    ['HTTP 503 Service Unavailable', 'remote_unavailable'],
+  ] as const)('normalizes and redacts degradable remote failure %s', (message, code) => {
+    const err = formatSupabaseControlError('bootstrap', message);
+
+    expect(err).toBeInstanceOf(SupabaseControlError);
+    expect(err).toMatchObject({ code, operation: 'bootstrap', degradable: true });
+    expect(err.message).not.toContain('service_role_secret_should_not_leak');
+    expect(isDegradableSupabaseControlError(err)).toBe(true);
+  });
+
+  it('does not classify local SQLite or encryption errors as degradable', () => {
+    expect(isDegradableSupabaseControlError(new Error('SQLITE_CORRUPT'))).toBe(false);
+    expect(isDegradableSupabaseControlError(new Error('Unsupported encryption key'))).toBe(false);
   });
 
   it('reads schema SQL from the repo sql/ folder', () => {
