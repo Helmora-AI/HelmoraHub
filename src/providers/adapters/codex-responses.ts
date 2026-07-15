@@ -6,6 +6,39 @@ import type {
   UpstreamStreamResult,
 } from '../../services/upstream.js';
 import { CODEX_DEFAULT_BASE_URL } from '../../oauth/handlers/codex-config.js';
+import type { ProposedToolCall } from '../../services/tool-loop.js';
+import type { RegisteredTool } from '../../tools/types.js';
+import type { ModelToolResult } from '../../tools/untrusted-context.js';
+import {
+  ProviderToolProtocolError,
+  assertCallId,
+  assertKnownTool,
+  pairToolResults,
+  parseToolArguments,
+  serializeModelToolResult,
+} from '../native-tools.js';
+
+type ResponsesMessageInput = { role: 'user' | 'assistant'; content: string };
+type ResponsesFunctionCall = {
+  type: 'function_call';
+  call_id: string;
+  name: string;
+  arguments: string;
+};
+type ResponsesFunctionOutput = {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
+};
+type ResponsesInputItem = ResponsesMessageInput | ResponsesFunctionCall | ResponsesFunctionOutput;
+
+export type ResponsesToolDefinition = {
+  type: 'function';
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: false;
+};
 
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -32,7 +65,7 @@ function textFromContent(content: unknown): string {
 /** OpenAI chat messages → Responses API input + optional instructions. */
 export function toResponsesInput(messages: ChatMessage[]): {
   instructions?: string;
-  input: Array<{ role: 'user' | 'assistant'; content: string }> | string;
+  input: ResponsesMessageInput[] | string;
 } {
   const systemParts: string[] = [];
   const input: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -58,6 +91,61 @@ export function toResponsesInput(messages: ChatMessage[]): {
     instructions: systemParts.length ? systemParts.join('\n\n') : undefined,
     input,
   };
+}
+
+export function toResponsesTools(
+  definitions: readonly RegisteredTool[],
+): ResponsesToolDefinition[] {
+  return definitions.map((tool) => ({
+    type: 'function',
+    name: tool.id,
+    description: tool.description,
+    parameters: tool.inputSchema,
+    strict: false,
+  }));
+}
+
+export function toResponsesToolItems(
+  calls: readonly ProposedToolCall[],
+  results: readonly ModelToolResult[],
+): ResponsesInputItem[] {
+  const pairs = pairToolResults('openai_responses', calls, results);
+  return [
+    ...calls.map((call): ResponsesFunctionCall => ({
+      type: 'function_call',
+      call_id: call.id,
+      name: call.toolId,
+      arguments: JSON.stringify(call.arguments),
+    })),
+    ...pairs.map(({ call, result }): ResponsesFunctionOutput => ({
+      type: 'function_call_output',
+      call_id: call.id,
+      output: serializeModelToolResult(result),
+    })),
+  ];
+}
+
+export function parseResponsesToolCalls(
+  body: unknown,
+  definitions: readonly RegisteredTool[],
+): ProposedToolCall[] {
+  if (!body || typeof body !== 'object') return [];
+  const output = (body as { output?: unknown }).output;
+  if (output === undefined) return [];
+  if (!Array.isArray(output)) {
+    throw new ProviderToolProtocolError('openai_responses_invalid_tool_call', 'Responses output must be an array.');
+  }
+  const seen = new Set<string>();
+  return output.flatMap((raw): ProposedToolCall[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const item = raw as { type?: unknown; call_id?: unknown; name?: unknown; arguments?: unknown };
+    if (item.type !== 'function_call') return [];
+    return [{
+      id: assertCallId({ protocol: 'openai_responses', value: item.call_id, seen }),
+      toolId: assertKnownTool({ protocol: 'openai_responses', name: item.name, definitions }),
+      arguments: parseToolArguments({ protocol: 'openai_responses', value: item.arguments }),
+    }];
+  });
 }
 
 function extractOutputText(body: Record<string, unknown>): string {
@@ -86,9 +174,11 @@ function extractOutputText(body: Record<string, unknown>): string {
 function toOpenAIBody(
   providerId: string,
   model: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  definitions: readonly RegisteredTool[] = [],
 ): unknown {
   const text = extractOutputText(body);
+  const calls = definitions.length > 0 ? parseResponsesToolCalls(body, definitions) : [];
   const usage = (body.usage ?? {}) as {
     input_tokens?: number;
     output_tokens?: number;
@@ -102,8 +192,18 @@ function toOpenAIBody(
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content: text },
-        finish_reason: 'stop',
+        message: {
+          role: 'assistant',
+          content: text || (calls.length > 0 ? null : ''),
+          ...(calls.length > 0 ? {
+            tool_calls: calls.map((call) => ({
+              id: call.id,
+              type: 'function',
+              function: { name: call.toolId, arguments: JSON.stringify(call.arguments) },
+            })),
+          } : {}),
+        },
+        finish_reason: calls.length > 0 ? 'tool_calls' : 'stop',
       },
     ],
     usage: {
@@ -154,7 +254,49 @@ export async function callCodexResponses(
     };
   }
 
-  const { instructions, input } = toResponsesInput(request.messages);
+  const { instructions, input: baseInput } = toResponsesInput(request.messages);
+  const toolRound = request.toolRound;
+  let input: ResponsesInputItem[] | string = baseInput;
+  if (toolRound?.calls?.length) {
+    if (!toolRound.results) {
+      return {
+        ok: false,
+        status: 400,
+        providerId: provider.id,
+        model,
+        body: null,
+        error: 'openai_responses_invalid_tool_result',
+      };
+    }
+    const messages: ResponsesInputItem[] = typeof baseInput === 'string'
+      ? [{ role: 'user', content: baseInput }]
+      : [...baseInput];
+    try {
+      messages.push(...toResponsesToolItems(toolRound.calls, toolRound.results));
+    } catch (error) {
+      if (error instanceof ProviderToolProtocolError) {
+        return {
+          ok: false,
+          status: 400,
+          providerId: provider.id,
+          model,
+          body: null,
+          error: error.code,
+        };
+      }
+      throw error;
+    }
+    input = messages;
+  } else if (toolRound?.results?.length) {
+    return {
+      ok: false,
+      status: 400,
+      providerId: provider.id,
+      model,
+      body: null,
+      error: 'openai_responses_invalid_tool_result',
+    };
+  }
   const url = responsesUrl(provider);
 
   try {
@@ -164,6 +306,7 @@ export async function callCodexResponses(
       body: JSON.stringify({
         model,
         input,
+        ...(toolRound ? { tools: toResponsesTools(toolRound.definitions) } : {}),
         ...(instructions ? { instructions } : {}),
         store: false,
         stream: false,
@@ -199,13 +342,32 @@ export async function callCodexResponses(
       };
     }
 
-    return {
-      ok: true,
-      status: 200,
-      providerId: provider.id,
-      model,
-      body: toOpenAIBody(provider.id, model, (body ?? {}) as Record<string, unknown>),
-    };
+    try {
+      return {
+        ok: true,
+        status: 200,
+        providerId: provider.id,
+        model,
+        body: toOpenAIBody(
+          provider.id,
+          model,
+          (body ?? {}) as Record<string, unknown>,
+          toolRound?.definitions,
+        ),
+      };
+    } catch (error) {
+      if (error instanceof ProviderToolProtocolError) {
+        return {
+          ok: false,
+          status: 502,
+          providerId: provider.id,
+          model,
+          body: null,
+          error: error.code,
+        };
+      }
+      throw error;
+    }
   } catch (err) {
     return {
       ok: false,
@@ -213,7 +375,9 @@ export async function callCodexResponses(
       providerId: provider.id,
       model,
       body: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof ProviderToolProtocolError
+        ? err.code
+        : err instanceof Error ? err.message : String(err),
     };
   }
 }
@@ -224,6 +388,16 @@ export async function callCodexResponsesStream(
   request: ChatRequest,
   signal?: AbortSignal
 ): Promise<UpstreamStreamResult> {
+  if (request.toolRound) {
+    return {
+      ok: false,
+      status: 503,
+      providerId: provider.id,
+      model: request.model ?? provider.defaultModel ?? 'unknown',
+      body: null,
+      error: 'native_tool_streaming_unsupported',
+    };
+  }
   const result = await callCodexResponses(provider, request, signal);
   if (!result.ok) {
     return {

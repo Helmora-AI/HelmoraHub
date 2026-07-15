@@ -402,14 +402,14 @@ Chrome CDP smoke verified the TinyFish connectivity test against a fresh credent
 **Description:** Extend OpenAI Chat Completions/OpenAI-compatible and the separate Codex Responses adapter to translate registered tools/calls/results while preserving call IDs and keeping protocol shapes inside adapters.
 
 **Acceptance criteria:**
-- [ ] OpenAI Chat and OpenAI Responses capability is explicit adapter/catalog metadata, never inferred from a model name.
-- [ ] Both protocols round-trip canonical calls/results and reject malformed arguments with protocol-specific fixtures.
-- [ ] Codex Responses never receives a Chat Completions tool schema; if a Responses feature cannot be supported, its adapter reports `nativeToolCalling=false` and uses the orchestrator path explicitly.
-- [ ] Existing non-tool request and streaming adapter behavior remains unchanged.
+- [x] OpenAI Chat and OpenAI Responses capability is explicit adapter/catalog metadata, never inferred from a model name.
+- [x] Both protocols round-trip canonical calls/results and reject malformed arguments with protocol-specific fixtures.
+- [x] Codex Responses never receives a Chat Completions tool schema; unsupported native streaming is reported explicitly so the runtime can use its non-stream tool round/orchestrator path.
+- [x] Existing non-tool request and streaming adapter behavior remains unchanged.
 
 **Verification:**
-- [ ] RED then GREEN: focused OpenAI/Codex cases in `adapters-p2.test.ts`
-- [ ] Existing provider adapter and vision tests pass
+- [x] RED then GREEN: focused OpenAI/Codex cases in `adapters-p2.test.ts`
+- [x] Existing provider adapter and vision tests pass
 
 **Dependencies:** Task 12
 

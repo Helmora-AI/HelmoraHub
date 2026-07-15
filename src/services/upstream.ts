@@ -1,6 +1,13 @@
 import type { ProviderToggle } from '../types.js';
 import { summarizeUserContent, countImagesInContent } from '../lib/vision.js';
 import { resolveUpstreamAuth } from '../providers/resolve-auth.js';
+import type { ProviderToolRound } from '../providers/native-tools.js';
+import { ProviderToolProtocolError } from '../providers/native-tools.js';
+import {
+  parseOpenAIChatToolCalls,
+  toOpenAIChatToolMessages,
+  toOpenAIChatTools,
+} from '../providers/adapters/openai-tools.js';
 
 export interface ChatMessage {
   role: string;
@@ -13,6 +20,8 @@ export interface ChatRequest {
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  /** Helmora-internal native tool state. This field is never sent upstream. */
+  toolRound?: ProviderToolRound;
   [key: string]: unknown;
 }
 
@@ -52,6 +61,36 @@ export interface UpstreamStreamErr {
 }
 
 export type UpstreamStreamResult = UpstreamStreamOk | UpstreamStreamErr;
+
+function openAIChatRequestBody(
+  request: ChatRequest,
+  model: string,
+  stream: boolean,
+): Record<string, unknown> {
+  const { toolRound, ...upstreamRequest } = request;
+  const messages = [...request.messages];
+  if (toolRound?.calls?.length) {
+    if (!toolRound.results) {
+      throw new ProviderToolProtocolError(
+        'openai_chat_invalid_tool_result',
+        'Tool call continuation requires results.',
+      );
+    }
+    messages.push(...toOpenAIChatToolMessages(toolRound.calls, toolRound.results));
+  } else if (toolRound?.results?.length) {
+    throw new ProviderToolProtocolError(
+      'openai_chat_invalid_tool_result',
+      'Tool results require their originating calls.',
+    );
+  }
+  return {
+    ...upstreamRequest,
+    messages,
+    ...(toolRound ? { tools: toOpenAIChatTools(toolRound.definitions) } : {}),
+    model,
+    stream,
+  };
+}
 
 export async function callOpenAICompatible(
   provider: ProviderToggle,
@@ -98,11 +137,7 @@ export async function callOpenAICompatible(
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        ...request,
-        model,
-        stream: false,
-      }),
+      body: JSON.stringify(openAIChatRequestBody(request, model, false)),
       signal,
     });
 
@@ -128,6 +163,24 @@ export async function callOpenAICompatible(
       };
     }
 
+    if (request.toolRound) {
+      try {
+        parseOpenAIChatToolCalls(body, request.toolRound.definitions);
+      } catch (error) {
+        if (error instanceof ProviderToolProtocolError) {
+          return {
+            ok: false,
+            status: 502,
+            providerId: provider.id,
+            model,
+            body: null,
+            error: error.code,
+          };
+        }
+        throw error;
+      }
+    }
+
     return {
       ok: true,
       status: response.status,
@@ -142,7 +195,9 @@ export async function callOpenAICompatible(
       providerId: provider.id,
       model,
       body: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof ProviderToolProtocolError
+        ? err.code
+        : err instanceof Error ? err.message : String(err),
     };
   }
 }
@@ -153,6 +208,16 @@ export async function callOpenAICompatibleStream(
   request: ChatRequest,
   signal?: AbortSignal
 ): Promise<UpstreamStreamResult> {
+  if (request.toolRound) {
+    return {
+      ok: false,
+      status: 503,
+      providerId: provider.id,
+      model: request.model ?? provider.defaultModel ?? 'unknown',
+      body: null,
+      error: 'native_tool_streaming_unsupported',
+    };
+  }
   const auth = resolveUpstreamAuth(provider);
   if (auth.error) {
     return {
@@ -197,11 +262,7 @@ export async function callOpenAICompatibleStream(
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        ...request,
-        model,
-        stream: true,
-      }),
+      body: JSON.stringify(openAIChatRequestBody(request, model, true)),
       signal,
     });
 

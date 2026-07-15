@@ -130,7 +130,11 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
 export function hasUnsupportedClientTools(body: unknown): boolean {
   const root = objectRecord(body);
   if (!root) return false;
-  if (Object.hasOwn(root, 'tools') || Object.hasOwn(root, 'tool_choice')) return true;
+  if (
+    Object.hasOwn(root, 'tools')
+    || Object.hasOwn(root, 'tool_choice')
+    || Object.hasOwn(root, 'toolRound')
+  ) return true;
   if (!Array.isArray(root.messages)) return false;
   return root.messages.some((message) => objectRecord(message)?.role === 'tool');
 }

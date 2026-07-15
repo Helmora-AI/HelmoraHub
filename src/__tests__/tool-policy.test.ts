@@ -83,6 +83,7 @@ describe('tool request policy', () => {
   it('detects client-defined OpenAI tool contracts and tool-role messages', () => {
     expect(hasUnsupportedClientTools({ tools: [] })).toBe(true);
     expect(hasUnsupportedClientTools({ tool_choice: 'auto' })).toBe(true);
+    expect(hasUnsupportedClientTools({ toolRound: { definitions: [] } })).toBe(true);
     expect(hasUnsupportedClientTools({ messages: [{ role: 'tool', content: 'result' }] }))
       .toBe(true);
     expect(hasUnsupportedClientTools({ messages: [{ role: 'user', content: 'hello' }] }))

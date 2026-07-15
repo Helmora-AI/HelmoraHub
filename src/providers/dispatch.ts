@@ -11,6 +11,7 @@ import { callGeminiCompatible, callGeminiCompatibleStream } from './adapters/gem
 import { callCodexResponses, callCodexResponsesStream } from './adapters/codex-responses.js';
 import { isChatProtocolReady } from './catalog/index.js';
 import { resolveProviderAuth } from '../oauth/resolve-provider-auth.js';
+import { nativeToolCapabilityFor } from './native-tools.js';
 
 function notReady(
   provider: ProviderToggle,
@@ -33,6 +34,16 @@ export async function dispatchChat(
 ): Promise<UpstreamResult> {
   if (!isChatProtocolReady(provider.protocol, provider.catalogReady)) {
     return notReady(provider, request);
+  }
+  if (request.toolRound && !nativeToolCapabilityFor(provider)) {
+    return {
+      ok: false,
+      status: 503,
+      providerId: provider.id,
+      model: request.model ?? provider.defaultModel ?? 'unknown',
+      body: null,
+      error: 'native_tool_calling_unsupported',
+    };
   }
 
   // Claude OAuth → Anthropic Messages with Bearer access token.
@@ -74,6 +85,17 @@ export async function dispatchChatStream(
       model: request.model ?? provider.defaultModel ?? 'unknown',
       body: null,
       error: `protocol_not_ready: ${provider.protocol}`,
+    };
+  }
+  if (request.toolRound) {
+    const capability = nativeToolCapabilityFor(provider);
+    return {
+      ok: false,
+      status: 503,
+      providerId: provider.id,
+      model: request.model ?? provider.defaultModel ?? 'unknown',
+      body: null,
+      error: capability ? 'native_tool_streaming_unsupported' : 'native_tool_calling_unsupported',
     };
   }
 
