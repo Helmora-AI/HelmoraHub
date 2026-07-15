@@ -8,6 +8,7 @@ import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
 import type { Express } from 'express';
 import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
+import { adminChatStatusForUpstreamFailure } from '../routes/chat.js';
 
 let app: Express;
 let tmpDir: string;
@@ -87,6 +88,13 @@ afterAll(async () => {
 });
 
 describe('POST /api/chat/completions', () => {
+  it('does not expose provider credential failures as admin-auth 401 responses', () => {
+    expect(adminChatStatusForUpstreamFailure(401)).toBe(502);
+    expect(adminChatStatusForUpstreamFailure(403)).toBe(502);
+    expect(adminChatStatusForUpstreamFailure(429)).toBe(429);
+    expect(adminChatStatusForUpstreamFailure(503)).toBe(503);
+  });
+
   it('rejects an invalid Helmora tool policy before model resolution', async () => {
     const res = await request(app)
       .post('/api/chat/completions')

@@ -76,6 +76,12 @@ function isChatModelRef(model: string): boolean {
   return false;
 }
 
+/** Keep provider credential failures distinct from Hub admin authentication. */
+export function adminChatStatusForUpstreamFailure(status: number): number {
+  if (status === 401 || status === 403) return 502;
+  return status >= 400 ? status : 502;
+}
+
 type ResolvedChatModel = {
   requestedModel: string;
   upstreamModel: string;
@@ -491,7 +497,7 @@ chatRouter.post('/completions', async (req, res, next) => {
       });
 
       if (!result.ok) {
-        res.status(result.status >= 400 ? result.status : 502).json(
+        res.status(adminChatStatusForUpstreamFailure(result.status)).json(
           ctx.mini
             ? {
                 error: {
@@ -577,7 +583,7 @@ chatRouter.post('/completions', async (req, res, next) => {
         miniSlot: null,
         miniCatalogId: null,
       });
-      res.status(result.status >= 400 ? result.status : 502).json(
+      res.status(adminChatStatusForUpstreamFailure(result.status)).json(
         ctx.mini
           ? {
               error: {
