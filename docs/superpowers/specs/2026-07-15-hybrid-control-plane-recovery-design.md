@@ -1,7 +1,7 @@
 # Hybrid Control Plane Recovery Design
 
 **Date:** 2026-07-15
-**Status:** Revised after design review, pending approval
+**Status:** Revised after second design review, pending approval
 **Surface:** HelmoraHub storage, Supabase schema, admin storage health
 
 ## Objective
@@ -84,10 +84,42 @@ Model-serving routes and normal admin mutation surfaces return:
 
 ### Recovery authentication
 
-Recovery mode authenticates independently through the existing interactive
-admin bootstrap/recovery token supplied by the environment or encrypted local
-bootstrap state. Normal Helmora API keys are unavailable without a control
-snapshot.
+Recovery authentication is independent from Supabase and normal Helmora API
+keys. Its credential source is:
+
+```text
+HELMORA_RECOVERY_TOKEN environment value
+-> otherwise a locally stored recoveryTokenHash created during successful admin setup
+-> otherwise recovery login is unavailable and startup health explains how to configure it
+```
+
+When `HELMORA_RECOVERY_TOKEN` is present it is authoritative and the local hash
+is ignored, allowing an operator-controlled emergency rotation. Plain recovery
+tokens are never persisted. Comparison is constant-time and login is covered by
+the strict auth rate limiter.
+
+`POST /api/auth/recovery-login` accepts `{ "token": string }` and issues a
+short-lived session with an explicit `aud: "helmora-recovery"` capability. It
+does not issue or reuse a full Admin SPA session. Recovery sessions expire after
+15 minutes, cannot be refreshed into admin sessions, and remain recovery-only
+even if the control snapshot becomes available during their lifetime.
+
+```ts
+type RecoveryLoginResponse = {
+  ok: true;
+  token: string;
+  scope: 'recovery';
+  expiresAt: string;
+};
+```
+
+The opaque recovery session token is accepted only as an Authorization bearer
+on the recovery allowlist and is never accepted by `requireAdmin` or model API
+authentication. `GET /api/auth/status` adds masked `recoveryAvailable` and
+`recoveryMode` booleans without revealing the credential source.
+
+Normal Helmora API keys and ordinary admin sessions are unavailable as recovery
+credentials when no control snapshot exists.
 
 A recovery session is capability-limited to this allowlist:
 
@@ -95,18 +127,71 @@ A recovery session is capability-limited to this allowlist:
 GET  /api/auth/status
 POST /api/auth/recovery-login
 GET  /api/storage/health
+POST /api/storage/test
 GET  /api/settings/storage
 GET  /api/settings/storage/schema
 PUT  /api/settings/storage
 ```
 
-The recovery-mode `PUT /api/settings/storage` accepts only storage connection,
-encrypted bootstrap, and `testOnly` repair fields; it cannot mutate unrelated
-runtime settings. Responses remain masked. The session cannot call model-serving
-routes, read control credentials, or access ordinary admin mutation surfaces.
-Leaving recovery mode requires a valid control snapshot and normal
-authentication; a recovery session is never silently upgraded into a full admin
-session.
+`POST /api/storage/test` performs a bounded, cache-free capability probe. It may
+use request-supplied Supabase bootstrap values without persisting or logging
+them, and returns normalized capability results with all secrets masked.
+
+```ts
+type RecoveryStorageTestInput = {
+  supabaseUrl?: string;
+  supabaseServiceRoleKey?: string;
+  encryptionKey?: string;
+};
+
+type RecoveryStorageTestResponse = {
+  ready: boolean;
+  capabilities: Array<{
+    id: string;
+    status: 'ready' | 'missing' | 'denied' | 'unreachable' | 'invalid';
+    errorCode?: string;
+  }>;
+  missingCapabilities: string[];
+};
+
+type RecoveryStorageHealthResponse = {
+  controlState: 'recovery' | 'degraded' | 'probing' | 'reconciling' | 'online';
+  snapshotAvailable: boolean;
+  activeGeneration: string | null;
+  recoveryAvailable: boolean;
+  degradedReason: string | null;
+};
+
+type RecoveryStorageUpdateInput = {
+  storageChoice: 'sql';
+  supabaseUrl?: string;
+  supabaseServiceRoleKey?: string;
+  encryptionKey?: string;
+};
+```
+
+The recovery-mode `PUT /api/settings/storage` accepts only storage connection
+and bootstrap repair fields; it cannot mutate unrelated runtime settings.
+Responses remain masked. The session cannot call model-serving routes, manage
+API keys, modify providers/models, read control credentials, or access ordinary
+admin mutation surfaces. Leaving recovery mode requires a valid control snapshot
+and normal authentication; a recovery session is never silently upgraded into
+a full admin session.
+
+Recovery storage updates require at least one changed field and never accept
+secret-clear operations. An encryption key may be persisted only when there is
+no usable encrypted snapshot, or when it matches the active vault key identity;
+key rotation belongs to H4. A successful update returns masked configuration and
+`restartRequired`, matching the existing storage-settings lifecycle.
+
+New admin setup generates and returns a recovery token once and stores only its
+local hash. `POST /api/auth/rotate-recovery-token` requires normal full-admin
+authentication, invalidates the previous local hash, and returns
+`{ "recoveryToken": string }` exactly once. When the environment token is
+authoritative, rotation returns HTTP 409 `recovery_token_env_managed` without
+creating a local token. Existing deployments must set `HELMORA_RECOVERY_TOKEN`
+before the H1 restart or rotate a recovery token while normal admin
+authentication is still available.
 
 ## Schema Readiness and Migrations
 
@@ -131,6 +216,8 @@ locally durable before any remote attempt. Remote-first writes are forbidden.
 ```ts
 type ControlMutationEnvelope = {
   operationId: string;
+  idempotencyKeyHash: string;
+  requestFingerprint: string;
   entityType: string;
   entityId: string;
   action: string;
@@ -140,6 +227,49 @@ type ControlMutationEnvelope = {
   createdAt: string;
 };
 ```
+
+Every H2 control-mutation endpoint requires an `Idempotency-Key` header of
+16--128 visible ASCII characters excluding whitespace and control characters.
+The Admin SPA generates one UUID per user submission and retains it across
+transport retries. Hub scopes the key to the authenticated actor and mutation
+endpoint, stores only its hash, and maps it to one stable server-generated
+`operationId`.
+
+The request fingerprint is HMAC-SHA-256 over the canonical validated mutation,
+using a local server key. Secret input participates in the in-memory HMAC but is
+never copied into the fingerprint or logs. Transport-only fields and randomized
+ciphertext bytes are excluded so a semantic retry produces the same fingerprint.
+
+- Same scoped key and same canonical request fingerprint returns the existing
+  operation receipt and never creates another mutation.
+- Same scoped key with a different fingerprint returns HTTP 409
+  `idempotency_key_reused`.
+- Missing or malformed keys return HTTP 400 before a local operation is created.
+- Internal reconciler retries always reuse the stored `operationId`; they do not
+  create a new client idempotency scope.
+
+```ts
+type ControlMutationReceipt = {
+  operationId: string;
+  syncStatus: 'applied' | 'pending';
+  entityType: string;
+  entityId: string;
+  revision: number | null;
+};
+```
+
+An online remote commit returns the endpoint's normal success status with an
+additive `controlMutation` receipt. A locally durable operation awaiting remote
+replay returns HTTP 202 with the same receipt shape. A retry returns the current
+receipt and canonical public result for that operation.
+
+Exactly-once mutation does not imply replaying one-time plaintext. For client
+API-key creation, remote state and hashes are deduplicated by operation ID, but a
+lost plaintext response is not reconstructed from the remote ledger. The local
+vault retains an encrypted delivery envelope for at most 10 minutes, scoped to
+the same actor and idempotency key and never synchronized remotely. After expiry,
+retry returns `secret_delivery_expired` and the administrator must rotate/revoke
+rather than creating a duplicate key.
 
 The mutation path is:
 
@@ -395,10 +525,21 @@ Required tests include:
   Supabase timeout.
 - No-snapshot recovery accepts only the bootstrap/recovery credential and route
   allowlist; normal API keys and model routes remain unavailable.
+- Environment recovery token precedence, local-hash fallback, rate limiting,
+  15-minute expiry, and recovery-session audience isolation are deterministic.
+- Storage recovery tests are cache-free, capability-complete, and never persist
+  request-supplied bootstrap secrets.
 - Invalid/corrupt local SQLite or encryption state remains fatal.
 - Settings connection test reports every missing required table.
 - Every online mutation persists its local write-ahead envelope before remote
   dispatch.
+- A client retry with the same idempotency key and request fingerprint returns
+  one operation; reusing the key with a different fingerprint returns 409.
+- Missing or malformed mutation idempotency keys fail before local persistence.
+- Request fingerprints are stable across semantic retries and disclose no secret
+  input or randomized ciphertext.
+- API-key plaintext delivery envelopes are local-only, actor-scoped, encrypted,
+  and expire after 10 minutes without creating a duplicate key.
 - A timeout after a committed remote mutation retries the same operation ID and
   applies exactly once.
 - The write that triggers degradation stays effective locally and is queued
@@ -433,7 +574,8 @@ Required tests include:
   adds full staged refresh generations. Incomplete legacy rows remain
   recovery-only rather than being assumed valid.
 - Convert Supabase/schema startup failures into degraded health.
-- Add independent, narrowly scoped recovery authentication.
+- Add independent, narrowly scoped recovery authentication, token rotation,
+  `.env.example`, and VPS recovery setup documentation.
 - Probe the complete active schema capability set.
 - Preserve current mutation semantics temporarily; H1 does not claim safe
   offline writes.
@@ -443,7 +585,8 @@ replication hardening.
 
 ### H2 -- Transactional outbox
 
-- Add local write-ahead envelopes and operation overlays.
+- Add required client idempotency keys, local write-ahead envelopes, operation
+  receipts, and operation overlays.
 - Add the Supabase mutation ledger and transactional idempotent RPC.
 - Serialize request mutations and reconciler ownership by state/fencing.
 - Recover leases after restart and replay by causal ordering.
