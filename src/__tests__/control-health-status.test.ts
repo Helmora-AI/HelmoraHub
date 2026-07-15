@@ -61,10 +61,15 @@ describe('control health on /api/status', () => {
   it('exposes online control health without secrets', async () => {
     const res = await request(app).get('/api/status').set('X-Admin-Token', adminToken);
     expect(res.status).toBe(200);
-    expect(res.body.control).toEqual({
+    expect(res.body.control).toMatchObject({
       controlPlane: 'online',
       vault: 'fresh',
       outboxPending: 0,
+      snapshotAvailable: true,
+      servingReady: true,
+      recoveryReady: false,
+      degradedReason: null,
+      degradedCapability: null,
     });
     expect(res.body.control.controlPlane).toBe('online');
     expect(res.body.control.outboxPending).toBe(0);
@@ -73,7 +78,12 @@ describe('control health on /api/status', () => {
     expect(blob).not.toMatch(/apiKey|serviceRole|password|token|secret|ciphertext|payload/i);
     expect(Object.keys(res.body.control).sort()).toEqual([
       'controlPlane',
+      'degradedCapability',
+      'degradedReason',
       'outboxPending',
+      'recoveryReady',
+      'servingReady',
+      'snapshotAvailable',
       'vault',
     ]);
   });

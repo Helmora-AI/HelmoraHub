@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, type Config } from '../lib/config.js';
+import { createApp } from '../app.js';
 import { formatSupabaseControlError } from '../lib/supabase-schema.js';
 import {
   closeStorage,
@@ -10,10 +11,13 @@ import {
   getControlHealth,
   initStorage,
   startControlPlaneProbe,
+  startControlPlaneProbeLoop,
+  stopControlPlaneProbeLoop,
 } from '../storage/index.js';
 import { HybridConfigStore } from '../storage/hybrid-store.js';
 import { SqliteConfigStore } from '../storage/sqlite-store.js';
 import type { ConfigStore } from '../storage/types.js';
+import request from './test-request.js';
 
 function configFor(dir: string): Config {
   const config = loadConfig();
@@ -43,6 +47,7 @@ describe('Hybrid storage local-first boot', () => {
 
   afterEach(async () => {
     await closeStorage();
+    vi.useRealTimers();
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -92,7 +97,9 @@ describe('Hybrid storage local-first boot', () => {
       servingReady: true,
     });
 
-    await startControlPlaneProbe();
+    const firstProbe = startControlPlaneProbe();
+    const overlappingProbe = startControlPlaneProbe();
+    await Promise.all([firstProbe, overlappingProbe]);
 
     expect(remoteCalls).toBe(1);
     expect(getControlHealth()).toMatchObject({
@@ -103,6 +110,20 @@ describe('Hybrid storage local-first boot', () => {
       servingReady: true,
     });
     expect((await getConfigStore().listProviders()).length).toBeGreaterThan(0);
+
+    const app = createApp(configFor(tmpDir));
+    const health = await request(app).get('/health');
+    expect(health.status).toBe(200);
+    expect(health.body).toMatchObject({
+      status: 'healthy',
+      controlState: 'degraded',
+      servingReady: true,
+      recoveryReady: false,
+    });
+
+    const ready = await request(app).get('/ready');
+    expect(ready.status).toBe(200);
+    expect(ready.body).toMatchObject({ status: 'ready', servingReady: true });
   });
 
   it('stays recovery-only when neither remote control nor a complete snapshot is available', async () => {
@@ -131,5 +152,69 @@ describe('Hybrid storage local-first boot', () => {
       snapshotAvailable: false,
       servingReady: false,
     });
+
+    const app = createApp(configFor(tmpDir));
+    const health = await request(app).get('/api/health');
+    expect(health.status).toBe(200);
+    expect(health.body).toMatchObject({
+      status: 'healthy',
+      controlState: 'recovery_only',
+      servingReady: false,
+      recoveryReady: false,
+    });
+
+    const ready = await request(app).get('/ready');
+    expect(ready.status).toBe(503);
+    expect(ready.body).toMatchObject({ status: 'not_ready', servingReady: false });
+
+    for (const pathName of [
+      '/state',
+      '/registry',
+      '/v1/models',
+      '/api/chat/sessions',
+      '/api/status',
+    ]) {
+      const gated = await request(app).get(pathName);
+      expect(gated.status).toBe(503);
+      expect(gated.body.error).toMatchObject({
+        type: 'control_snapshot_unavailable',
+        recoveryAvailable: false,
+      });
+    }
+
+    const authStatus = await request(app).get('/api/auth/status');
+    expect(authStatus.status).toBe(200);
+  });
+
+  it('starts one probe loop, prevents overlap, and drains it on stop', async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-boot-probe-loop-'));
+    let remoteCalls = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+
+    await initStorage(configFor(tmpDir), {
+      createHybridControl: () => ({
+        store: { close: async () => undefined } as ConfigStore,
+        bootstrap: async () => {
+          remoteCalls += 1;
+          await probeGate;
+          throw formatSupabaseControlError('bootstrap', 'TypeError: fetch failed');
+        },
+      }),
+    });
+
+    startControlPlaneProbeLoop({ intervalMs: 10 });
+    startControlPlaneProbeLoop({ intervalMs: 10 });
+    expect(remoteCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(remoteCalls).toBe(1);
+
+    releaseProbe();
+    await stopControlPlaneProbeLoop();
+    expect(getControlHealth().controlPlane).toBe('recovery_only');
   });
 });

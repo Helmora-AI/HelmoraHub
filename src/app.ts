@@ -11,6 +11,7 @@ import { adminRouter } from './routes/admin.js';
 import { settingsRouter } from './routes/settings.js';
 import { authRouter } from './routes/auth.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
+import { requireControlSnapshot } from './middleware/requireControlSnapshot.js';
 import { keysRouter, pricingRouter, usageRouter } from './routes/keys.js';
 import { chatRouter } from './routes/chat.js';
 import { officeRouter } from './routes/office.js';
@@ -58,26 +59,26 @@ export function createApp(_config: Config) {
   app.use(runtimeRouter);
 
   // OpenAI-compatible surface (hel_dev_ / hel_pro_ keys; legacy ctrl_* accepted)
-  app.use('/v1', v1Router);
+  app.use('/v1', requireControlSnapshot, v1Router);
 
   // Auth bootstrap / login (public subset)
   app.use('/api/auth', authRouter);
 
   // Admin Chat — SPA session only (before broad /api requireAdmin)
-  app.use('/api/chat', chatRouter);
+  app.use('/api/chat', requireControlSnapshot, chatRouter);
 
   // OAuth — callback is public; start/refresh/disconnect use their own middleware
   // Mount before broad /api requireAdmin so GET /callback stays unauthenticated.
-  app.use('/api/oauth', oauthRouter);
+  app.use('/api/oauth', requireControlSnapshot, oauthRouter);
 
   // Control plane — admin session cookie or admin bearer token
-  app.use('/api/keys', requireAdmin, keysRouter);
-  app.use('/api/pricing', requireAdmin, pricingRouter);
-  app.use('/api/usage', requireAdmin, usageRouter);
-  app.use('/api/settings', requireAdmin, settingsRouter);
-  app.use('/api/office', requireAdmin, officeRouter);
-  app.use('/api/tools', requireAdmin, toolsRouter);
-  app.use('/api', requireAdmin, adminRouter);
+  app.use('/api/keys', requireControlSnapshot, requireAdmin, keysRouter);
+  app.use('/api/pricing', requireControlSnapshot, requireAdmin, pricingRouter);
+  app.use('/api/usage', requireControlSnapshot, requireAdmin, usageRouter);
+  app.use('/api/settings', requireControlSnapshot, requireAdmin, settingsRouter);
+  app.use('/api/office', requireControlSnapshot, requireAdmin, officeRouter);
+  app.use('/api/tools', requireControlSnapshot, requireAdmin, toolsRouter);
+  app.use('/api', requireControlSnapshot, requireAdmin, adminRouter);
 
   const publicCandidates = [
     path.join(__dirname, 'public'),

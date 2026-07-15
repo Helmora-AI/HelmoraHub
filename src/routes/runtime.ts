@@ -1,29 +1,47 @@
 import { Router } from 'express';
 import { listAgents, listProviders, getActiveMode } from '../db/index.js';
 import { MODE_PROFILES } from '../types.js';
+import { requireControlSnapshot } from '../middleware/requireControlSnapshot.js';
+import { getControlHealth } from '../storage/index.js';
 
 export const runtimeRouter = Router();
 
-runtimeRouter.get('/health', (_req, res) => {
-  res.json({
+function healthPayload() {
+  const control = getControlHealth();
+  return {
     ok: true,
     status: 'healthy',
     service: 'Helmora AI',
     version: '0.1.0',
-  });
+    controlState: control.controlPlane,
+    servingReady: control.servingReady,
+    recoveryReady: control.recoveryReady,
+  };
+}
+
+runtimeRouter.get('/health', (_req, res) => {
+  res.json(healthPayload());
 });
 
 /** SPA / proxy alias — same payload as GET /health */
 runtimeRouter.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    status: 'healthy',
+  res.json(healthPayload());
+});
+
+runtimeRouter.get('/ready', (_req, res) => {
+  const control = getControlHealth();
+  res.status(control.servingReady ? 200 : 503).json({
+    ok: control.servingReady,
+    status: control.servingReady ? 'ready' : 'not_ready',
     service: 'Helmora AI',
     version: '0.1.0',
+    controlState: control.controlPlane,
+    servingReady: control.servingReady,
+    recoveryReady: control.recoveryReady,
   });
 });
 
-runtimeRouter.get('/state', async (_req, res, next) => {
+runtimeRouter.get('/state', requireControlSnapshot, async (_req, res, next) => {
   try {
     const agents = (await listAgents()).filter((a) => a.enabled);
     const active: Record<string, string> = {};
@@ -68,7 +86,7 @@ runtimeRouter.get('/state', async (_req, res, next) => {
   }
 });
 
-runtimeRouter.get('/registry', async (_req, res, next) => {
+runtimeRouter.get('/registry', requireControlSnapshot, async (_req, res, next) => {
   try {
     const providers = (await listProviders()).filter((p) => p.enabled);
     const agents = (await listAgents()).filter((a) => a.enabled);
