@@ -39,3 +39,10 @@
 ## Final review
 
 - [ ] Task 19: Final compatibility, browser, and documentation review
+
+## Controlled cloudflared startup update
+
+- [ ] Task CU1: Add failing shell-facing updater behavior tests
+- [ ] Task CU2: Add bounded non-fatal updater and call it from Pterodactyl startup
+- [ ] Task CU3: Update deployment docs and run final verification
+- [ ] Checkpoint: Focused tests, shell syntax, typecheck, build, and diff checks pass

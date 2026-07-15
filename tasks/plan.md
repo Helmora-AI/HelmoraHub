@@ -616,3 +616,117 @@ Chrome CDP smoke verified the TinyFish connectivity test against a fresh credent
 ## Open Questions
 
 None. Deferred work remains write approval/resume, generic connectors, DuckDuckGo production search, MCP, Redis coordination, and proactive automation.
+
+---
+
+# Implementation Plan: Controlled cloudflared Startup Update
+
+## Overview
+
+Add a restart-boundary update for the Hub-managed GitHub `cloudflared` binary.
+The update is bounded, observable, optional, and non-fatal so tunnel maintenance
+cannot prevent Helmora Hub from starting.
+
+## Architecture Decisions
+
+- Keep `--no-autoupdate` on the long-running connector and update only before
+  startup.
+- Operate only on `$DATA_DIR/bin/cloudflared`; do not attempt privileged package
+  manager updates for PATH binaries.
+- Isolate the shell behavior so it can be exercised with a fake binary without
+  running npm installation, build, or the Hub process.
+- Default the controlled update on and provide `CLOUDFLARED_AUTO_UPDATE=0|false`
+  as the explicit opt-out.
+
+## Dependency Graph
+
+```text
+Shell behavior tests
+    -> bounded update helper
+        -> ptero-startup invocation
+            -> deploy documentation and final verification
+```
+
+## Task 1: Prove controlled update behavior
+
+**Description:** Add focused shell-facing tests using a temporary managed binary
+to specify update, opt-out, missing-binary, and non-fatal failure behavior.
+
+**Acceptance criteria:**
+- [ ] An existing managed binary receives exactly one `update` command.
+- [ ] Opt-out and missing-binary paths do not invoke the updater.
+- [ ] A failed updater returns success to its startup caller and logs a warning.
+
+**Verification:**
+- [ ] RED: focused test fails before the helper exists.
+- [ ] GREEN: `npm.cmd test -- src/__tests__/ptero-cloudflared-update.test.ts`.
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `src/__tests__/ptero-cloudflared-update.test.ts`
+
+**Estimated scope:** S
+
+## Task 2: Integrate the bounded startup updater
+
+**Description:** Implement the isolated update helper and invoke it from
+`ptero-startup.sh` after `$DATA_DIR` is prepared and before the production build.
+
+**Acceptance criteria:**
+- [ ] The Hub-managed binary logs its version before and after update.
+- [ ] `timeout 120` is used when available; updater errors remain non-fatal.
+- [ ] First boot without a managed binary continues to the existing latest-release download path.
+
+**Verification:**
+- [ ] Focused shell-facing tests pass.
+- [ ] `bash -n scripts/ptero-startup.sh` and helper syntax check pass where Bash is available.
+
+**Dependencies:** Task 1
+
+**Files likely touched:**
+- `scripts/cloudflared-update.sh`
+- `scripts/ptero-startup.sh`
+
+**Estimated scope:** S
+
+## Task 3: Document and release-check
+
+**Description:** Document the controlled update and opt-out, then verify the Hub
+remains buildable and the final diff contains no unrelated changes.
+
+**Acceptance criteria:**
+- [ ] Deployment docs explain GitHub-binary support and package-manager exclusion.
+- [ ] Verification and secret/diff checks pass.
+
+**Verification:**
+- [ ] `npm.cmd run typecheck`
+- [ ] `npm.cmd run build`
+- [ ] `git diff --check`
+
+**Dependencies:** Task 2
+
+**Files likely touched:**
+- `docs/deploy.md`
+
+**Estimated scope:** XS
+
+## Checkpoint: Complete
+
+- [ ] Focused tests prove all update branches.
+- [ ] Shell syntax, typecheck, and production build pass.
+- [ ] Existing tunnel retry and `--no-autoupdate` behavior remain unchanged.
+- [ ] One rollback-friendly Hub commit is ready for the user's push.
+
+## Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Update server is unavailable | Medium | Bound execution and continue with the existing binary |
+| Package-managed binary cannot self-update | Medium | Never update PATH-only binaries |
+| First boot has no binary yet | Low | Skip; existing runtime downloads the latest GitHub release |
+| Updater output exposes configuration | Low | Pass no tunnel token or secret arguments |
+
+## Open Questions
+
+None.
