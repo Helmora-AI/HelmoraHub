@@ -9,6 +9,7 @@ import {
 } from './control-plane.js';
 import { MemoryRateStore, RedisRateStore } from './rate-store.js';
 import type { ConfigStore, RateStore, StorageBundle } from './types.js';
+import { recoveryCredentialAvailable } from '../lib/admin-auth.js';
 
 let bundle: StorageBundle | null = null;
 let controlProbeTimer: NodeJS.Timeout | null = null;
@@ -102,7 +103,14 @@ export function getConfigStore(): ConfigStore {
 
 export function getControlHealth(): ControlHealthSnapshot {
   const store = getConfigStore();
-  if (store instanceof HybridConfigStore) return store.getControlHealth();
+  if (store instanceof HybridConfigStore) {
+    const health = store.getControlHealth();
+    return {
+      ...health,
+      recoveryReady:
+        health.controlPlane === 'recovery_only' && recoveryCredentialAvailable(),
+    };
+  }
   return {
     controlPlane: 'online',
     vault: 'fresh',

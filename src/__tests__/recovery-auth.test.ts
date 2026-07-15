@@ -160,8 +160,8 @@ describe('recovery authentication primitives', () => {
     const admin = await request(app)
       .get('/api/status')
       .set('Authorization', `Bearer ${login.body.token}`);
-    expect(admin.status).toBe(401);
-    expect(admin.body.error.type).toBe('admin_unauthorized');
+    expect(admin.status).toBe(403);
+    expect(admin.body.error.type).toBe('recovery_scope_denied');
 
     const model = await request(app)
       .get('/v1/models')

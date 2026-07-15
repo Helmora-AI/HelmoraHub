@@ -145,6 +145,86 @@ function classifySupabaseControlFailure(message: string): SupabaseControlFailure
   return 'remote_error';
 }
 
+export const SUPABASE_CONTROL_CAPABILITIES = [
+  { id: 'settings', table: 'helmora_settings' },
+  { id: 'providers', table: 'helmora_providers' },
+  { id: 'agents', table: 'helmora_agents' },
+  { id: 'connector_credentials', table: 'helmora_connector_credentials' },
+  { id: 'tool_runs', table: 'helmora_tool_runs' },
+  { id: 'provider_oauth_credentials', table: 'helmora_provider_oauth_credentials' },
+  { id: 'oauth_pending_states', table: 'helmora_oauth_pending_states' },
+  { id: 'chat_sessions', table: 'helmora_chat_sessions' },
+  { id: 'chat_messages', table: 'helmora_chat_messages' },
+] as const;
+
+export type SupabaseCapabilityProbeClient = {
+  from(table: string): {
+    select(columns: string): {
+      limit(count: number): PromiseLike<{ error: { message: string } | null }>;
+    };
+  };
+};
+
+export type SupabaseCapabilityStatus = {
+  id: (typeof SUPABASE_CONTROL_CAPABILITIES)[number]['id'];
+  table: (typeof SUPABASE_CONTROL_CAPABILITIES)[number]['table'];
+  status: 'ready' | 'missing' | 'unavailable';
+  errorCode: SupabaseControlFailureCode | null;
+};
+
+function withProbeTimeout<T>(promise: PromiseLike<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Supabase capability probe timeout')), timeoutMs);
+    timer.unref?.();
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+export async function probeSupabaseControlCapabilities(
+  client: SupabaseCapabilityProbeClient,
+  timeoutMs = 10_000
+): Promise<{ ok: boolean; capabilities: SupabaseCapabilityStatus[] }> {
+  const capabilities = await Promise.all(
+    SUPABASE_CONTROL_CAPABILITIES.map(async (capability): Promise<SupabaseCapabilityStatus> => {
+      try {
+        const result = await withProbeTimeout(
+          client.from(capability.table).select('*').limit(1),
+          timeoutMs
+        );
+        if (!result.error) {
+          return { ...capability, status: 'ready', errorCode: null };
+        }
+        const code = classifySupabaseControlFailure(result.error.message);
+        return {
+          ...capability,
+          status: code === 'schema_incomplete' ? 'missing' : 'unavailable',
+          errorCode: code,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'remote error';
+        return {
+          ...capability,
+          status: 'unavailable',
+          errorCode: classifySupabaseControlFailure(message),
+        };
+      }
+    })
+  );
+  return {
+    ok: capabilities.every((capability) => capability.status === 'ready'),
+    capabilities,
+  };
+}
+
 /** Enrich Supabase PostgREST errors when control-plane tables were never applied. */
 export function formatSupabaseControlError(
   operation: string,

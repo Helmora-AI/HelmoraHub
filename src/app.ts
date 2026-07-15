@@ -17,6 +17,7 @@ import { chatRouter } from './routes/chat.js';
 import { officeRouter } from './routes/office.js';
 import { oauthRouter } from './routes/oauth.js';
 import { toolsRouter } from './routes/tools.js';
+import { recoveryRouter } from './routes/recovery.js';
 import './oauth/handlers/index.js';
 import { DOCS_CATALOG } from './docs/catalog.js';
 
@@ -63,6 +64,9 @@ export function createApp(_config: Config) {
 
   // Auth bootstrap / login (public subset)
   app.use('/api/auth', authRouter);
+
+  // Recovery sessions are bearer-only and restricted to an exact method/path allowlist.
+  app.use('/api', recoveryRouter);
 
   // Admin Chat — SPA session only (before broad /api requireAdmin)
   app.use('/api/chat', requireControlSnapshot, chatRouter);

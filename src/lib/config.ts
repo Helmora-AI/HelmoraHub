@@ -12,6 +12,7 @@ import {
   storageChoiceToBackend,
   type StorageChoice,
 } from './runtime-config.js';
+import { readRecoverySupabaseCredential } from './recovery-control-vault.js';
 
 loadDotenv();
 
@@ -108,12 +109,17 @@ export function loadConfig(): Config {
 
   const supabaseUrl =
     runtime.supabaseUrl || process.env.SUPABASE_URL?.trim() || null;
-  const supabaseServiceRoleKey =
-    runtime.supabaseServiceRoleKey ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
-    null;
   const encryptionKey =
     process.env.ENCRYPTION_KEY?.trim() || runtime.encryptionKey || null;
+  const recoverySupabaseServiceRoleKey = readRecoverySupabaseCredential(
+    dataDir,
+    encryptionKey
+  );
+  const supabaseServiceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
+    runtime.supabaseServiceRoleKey ||
+    recoverySupabaseServiceRoleKey ||
+    null;
   const redisUrl = runtime.redisUrl || process.env.REDIS_URL?.trim() || null;
   const publicUrl = helEnv('PUBLIC_URL') || null;
   const frontendUrl = helEnv('FRONTEND_URL') || null;

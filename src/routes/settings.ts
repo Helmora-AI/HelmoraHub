@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getActiveConfig, loadConfig, setActiveConfig, type RateBackend } from '../lib/config.js';
-import { HEL_TABLE } from '../lib/hel-env.js';
+import {
+  getActiveConfig,
+  loadConfig,
+  setActiveConfig,
+  type Config,
+  type RateBackend,
+} from '../lib/config.js';
 import {
   maskRuntimeConfig,
   readRuntimeConfig,
@@ -12,16 +17,21 @@ import {
   type StorageChoice,
 } from '../lib/runtime-config.js';
 import {
-  formatSupabaseControlError,
-  isSupabaseMissingTableError,
+  probeSupabaseControlCapabilities,
   readSupabaseSchemaSql,
   supabaseSchemaApiHints,
   SUPABASE_SCHEMA_APPLY_HINT,
   SUPABASE_SCHEMA_REL_PATH,
+  type SupabaseCapabilityProbeClient,
 } from '../lib/supabase-schema.js';
 import { getControlHealth, getStorage, reinitStorage } from '../storage/index.js';
 import { maskSecret } from '../lib/crypto.js';
 import { getTunnelStatus, stopTunnel } from '../tunnel/manager.js';
+import {
+  clearRecoverySupabaseCredential,
+  readRecoverySupabaseCredential,
+  writeRecoverySupabaseCredential,
+} from '../lib/recovery-control-vault.js';
 import {
   sealTunnelToken,
   startTunnelFromSavedConfig,
@@ -58,8 +68,8 @@ settingsRouter.get('/', (_req, res) => {
       options: [LOCAL_OPTION, SQL_OPTION],
       form: {
         supabaseUrl: form.supabaseUrl,
-        supabaseServiceRoleConfigured: Boolean(runtime.supabaseServiceRoleKey),
-        supabaseServiceRoleHint: maskSecret(runtime.supabaseServiceRoleKey),
+        supabaseServiceRoleConfigured: Boolean(config.supabaseServiceRoleKey),
+        supabaseServiceRoleHint: maskSecret(config.supabaseServiceRoleKey),
         encryptionKeyConfigured: Boolean(runtime.encryptionKey),
         encryptionKeyHint: runtime.encryptionKey ? '••••' : null,
         rateBackend: form.rateBackend,
@@ -97,7 +107,10 @@ settingsRouter.get('/storage', (_req, res) => {
       control,
     },
     control,
-    form: maskRuntimeConfig(runtime),
+    form: {
+      ...maskRuntimeConfig(runtime),
+      hasSupabaseServiceRoleKey: Boolean(config.supabaseServiceRoleKey),
+    },
     defaults: { choice: 'local' },
     schema,
   });
@@ -155,6 +168,11 @@ settingsRouter.put('/storage', async (req, res, next) => {
     else if (body.supabaseServiceRoleKey !== undefined) {
       serviceKey = body.supabaseServiceRoleKey;
     }
+    const serviceKeyMutation =
+      body.clearSupabaseServiceRoleKey === true ||
+      body.supabaseServiceRoleKey !== undefined;
+    const effectiveServiceKey =
+      serviceKey || (!serviceKeyMutation ? current.supabaseServiceRoleKey : null);
 
     let encKey = prev.encryptionKey;
     if (body.clearEncryptionKey) encKey = null;
@@ -175,7 +193,7 @@ settingsRouter.put('/storage', async (req, res, next) => {
     };
 
     if (nextRuntime.storageChoice === 'sql') {
-      if (!nextRuntime.supabaseUrl || !nextRuntime.supabaseServiceRoleKey) {
+      if (!nextRuntime.supabaseUrl || !effectiveServiceKey) {
         res.status(400).json({
           error: {
             message:
@@ -211,20 +229,24 @@ settingsRouter.put('/storage', async (req, res, next) => {
         const { createClient } = await import('@supabase/supabase-js');
         const client = createClient(
           nextRuntime.supabaseUrl!,
-          nextRuntime.supabaseServiceRoleKey!,
+          effectiveServiceKey!,
           { auth: { persistSession: false, autoRefreshToken: false } }
-        );
-        const probe = await client.from(HEL_TABLE.settings).select('key').limit(1);
-        if (probe.error) {
-          const enriched = formatSupabaseControlError('probe', probe.error.message);
-          const schemaMissing = isSupabaseMissingTableError(probe.error.message);
+        ) as unknown as SupabaseCapabilityProbeClient;
+        const probe = await probeSupabaseControlCapabilities(client);
+        if (!probe.ok) {
+          const schemaMissing = probe.capabilities.some(
+            (capability) => capability.status === 'missing'
+          );
           res.status(400).json({
             ok: false,
             tested: false,
             schemaMissing,
             schema: supabaseSchemaApiHints(),
+            capabilities: probe.capabilities,
             error: {
-              message: enriched.message,
+              message: schemaMissing
+                ? 'One or more Supabase control capabilities are missing.'
+                : 'One or more Supabase control capabilities are unavailable.',
               type: schemaMissing ? 'schema_missing' : 'connection_failed',
             },
           });
@@ -233,19 +255,18 @@ settingsRouter.put('/storage', async (req, res, next) => {
         res.json({
           ok: true,
           tested: true,
-          message: `Supabase connection OK (${HEL_TABLE.settings} reachable).`,
+          capabilities: probe.capabilities,
+          message: 'Supabase connection OK (all control capabilities reachable).',
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const schemaMissing = isSupabaseMissingTableError(message);
         res.status(400).json({
           ok: false,
           tested: false,
-          schemaMissing,
+          schemaMissing: false,
           schema: supabaseSchemaApiHints(),
           error: {
-            message,
-            type: schemaMissing ? 'schema_missing' : 'connection_failed',
+            message: 'Supabase capability probe failed.',
+            type: 'connection_failed',
           },
         });
       }
@@ -262,28 +283,42 @@ settingsRouter.put('/storage', async (req, res, next) => {
       return;
     }
 
-    writeRuntimeConfig(current.dataDir, nextRuntime);
-
-    // Rebuild Config from disk + env
-    const refreshed = loadConfig();
-    // loadConfig already applied runtime file; ensure choice matches save
-    refreshed.storageChoice = nextRuntime.storageChoice;
-    refreshed.storageBackend = storageChoiceToBackend(nextRuntime.storageChoice);
-    refreshed.supabaseUrl = nextRuntime.supabaseUrl || refreshed.supabaseUrl;
-    refreshed.supabaseServiceRoleKey =
-      nextRuntime.supabaseServiceRoleKey || refreshed.supabaseServiceRoleKey;
-    refreshed.encryptionKey =
-      process.env.ENCRYPTION_KEY?.trim() ||
-      nextRuntime.encryptionKey ||
-      refreshed.encryptionKey;
-    refreshed.rateBackend = nextRuntime.rateBackend;
-    refreshed.redisUrl = nextRuntime.redisUrl || refreshed.redisUrl;
-
+    const previousRecoveryCredential = serviceKeyMutation
+      ? readRecoverySupabaseCredential(current.dataDir, current.encryptionKey)
+      : null;
+    let refreshed: Config;
     try {
+      if (serviceKeyMutation) {
+        clearRecoverySupabaseCredential(current.dataDir);
+      }
+      writeRuntimeConfig(current.dataDir, nextRuntime);
+
+      // Rebuild Config from disk + env
+      refreshed = loadConfig();
+      // loadConfig already applied runtime file; ensure choice matches save
+      refreshed.storageChoice = nextRuntime.storageChoice;
+      refreshed.storageBackend = storageChoiceToBackend(nextRuntime.storageChoice);
+      refreshed.supabaseUrl = nextRuntime.supabaseUrl || refreshed.supabaseUrl;
+      refreshed.supabaseServiceRoleKey =
+        nextRuntime.supabaseServiceRoleKey || refreshed.supabaseServiceRoleKey;
+      refreshed.encryptionKey =
+        process.env.ENCRYPTION_KEY?.trim() ||
+        nextRuntime.encryptionKey ||
+        refreshed.encryptionKey;
+      refreshed.rateBackend = nextRuntime.rateBackend;
+      refreshed.redisUrl = nextRuntime.redisUrl || refreshed.redisUrl;
+
       await reinitStorage(refreshed);
     } catch (err) {
       // Roll back file to previous so next boot is consistent
       writeRuntimeConfig(current.dataDir, prev);
+      if (serviceKeyMutation && previousRecoveryCredential && current.encryptionKey) {
+        writeRecoverySupabaseCredential(
+          current.dataDir,
+          current.encryptionKey,
+          previousRecoveryCredential
+        );
+      }
       setActiveConfig(current);
       throw err;
     }
