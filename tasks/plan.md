@@ -378,14 +378,14 @@ Chrome CDP smoke verified the TinyFish connectivity test against a fresh credent
 **Description:** Build the provider-neutral loop state machine for validated calls, deduplication, read-only reauthorization, execution, untrusted result envelopes, truncation, exact budgets, and root cancellation.
 
 **Acceptance criteria:**
-- [ ] Every proposed call is schema-validated and policy-checked immediately before execution.
-- [ ] Exact boundaries are enforced and tested: 4 rounds, 4 calls/round, 8 calls total, 30,000 ms total, 10,000 ms/connector request, 64 KiB/result, and 128 KiB total tool context or the smaller model budget.
-- [ ] One root `AbortSignal` propagates through planning, connector work, retries, native rounds, and answer generation; abort stops new work without unhandled rejection or late activity.
-- [ ] Tool results cannot mutate identity, routing, scopes, registry, credentials, or policy.
+- [x] Every proposed call is schema-validated and policy-checked immediately before execution.
+- [x] Exact boundaries are enforced and tested: 4 rounds, 4 calls/round, 8 calls total, 30,000 ms total, 10,000 ms/connector request, 64 KiB/result, and 128 KiB total tool context or the smaller model budget.
+- [x] One root `AbortSignal` propagates through planning, connector work, retries, native rounds, and answer generation; abort stops new work without unhandled rejection or late activity.
+- [x] Tool results cannot mutate identity, routing, scopes, registry, credentials, or policy.
 
 **Verification:**
-- [ ] RED then GREEN: `npm.cmd test -- src/__tests__/tool-loop.test.ts`
-- [ ] `npm.cmd run typecheck`
+- [x] RED then GREEN: `npm.cmd test -- src/__tests__/tool-loop.test.ts`
+- [x] `npm.cmd run typecheck`
 
 **Dependencies:** Tasks 10–11
 

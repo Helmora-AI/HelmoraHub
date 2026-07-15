@@ -112,6 +112,16 @@ export function redactFetchUrlForDisplay(value: string): string {
   }
 }
 
+export function redactSensitiveUrlForModel(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return hasSensitiveQuery(url) ? redactFetchUrlForDisplay(url.toString()) : url.toString();
+  } catch {
+    return '[invalid URL]';
+  }
+}
+
 export async function validatePublicHttpsUrl(
   value: unknown,
   options: { lookup?: DnsLookup } = {},
