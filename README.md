@@ -106,6 +106,24 @@ HELMORA_FRONTEND_URL=https://app.example.com
 ENCRYPTION_KEY=…
 ```
 
+### Hub + Frontend rollout
+
+Deploy the Hub before the Frontend so Pages never points at an origin that is
+still restarting:
+
+1. Push/deploy Hub and restart its Pterodactyl service.
+2. Wait for the `Cloudflare connector registered` log entry.
+3. Confirm several consecutive public requests to `GET /health` and
+   `GET /api/auth/status` return `200`.
+4. Confirm a browser-origin preflight returns `204` with
+   `Access-Control-Allow-Origin` before deploying Cloudflare Pages.
+
+A Cloudflare-generated `502` does not pass through Helmora Hub, so it cannot
+contain the Hub's CORS headers and browsers may report it as a CORS failure.
+Treat that combination as a tunnel/origin outage. Hub retries `cloudflared`
+with bounded backoff; see [docs/deploy.md](docs/deploy.md) for diagnosis and
+recovery steps.
+
 ## Branding
 
 | File | Use |
