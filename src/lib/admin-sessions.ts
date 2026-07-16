@@ -1,120 +1,93 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { getActiveConfig } from './config.js';
-import { helEnv, HEL_SESSION_PREFIX, isHelSessionToken } from './hel-env.js';
+import {
+  getAdminAuthStore,
+  type AdminSessionKind,
+  type StoredAdminSession,
+} from './admin-auth-store.js';
+import { HEL_SESSION_PREFIX, isHelSessionToken } from './hel-env.js';
 
-const DEFAULT_TTL_SEC = 60 * 60 * 24;
-
-export type AdminSessionRecord = {
-  hash: string;
-  expiresAt: number;
-  createdAt: number;
+export type PreparedAdminSession = {
+  token: string;
+  expiresAt: string;
+  record: StoredAdminSession;
 };
-
-type SessionFile = { sessions: AdminSessionRecord[] };
-
-function sessionsPath(dataDir: string): string {
-  return path.join(dataDir, 'admin-sessions.json');
-}
-
-function readFile(dataDir: string): SessionFile {
-  const p = sessionsPath(dataDir);
-  if (!fs.existsSync(p)) return { sessions: [] };
-  try {
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as SessionFile;
-    return { sessions: Array.isArray(raw.sessions) ? raw.sessions : [] };
-  } catch {
-    return { sessions: [] };
-  }
-}
-
-function writeFile(dataDir: string, data: SessionFile): void {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(sessionsPath(dataDir), JSON.stringify(data, null, 2), 'utf8');
-}
 
 export function hashSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
 export function sessionTtlSec(): number {
-  const raw = helEnv('SESSION_TTL_SEC');
-  const n = raw ? Number(raw) : DEFAULT_TTL_SEC;
-  return Number.isFinite(n) && n > 60 ? Math.floor(n) : DEFAULT_TTL_SEC;
+  return getActiveConfig().sessionTtlSec;
 }
 
-export function issueAdminSession(): { token: string; expiresAt: string } {
-  const config = getActiveConfig();
+export function prepareAdminSession(
+  kind: AdminSessionKind,
+  now = Date.now()
+): PreparedAdminSession {
   const token = `${HEL_SESSION_PREFIX}${randomBytes(32).toString('hex')}`;
-  const now = Date.now();
   const expiresAtMs = now + sessionTtlSec() * 1000;
-  const file = readFile(config.dataDir);
-  const pruned = file.sessions.filter((s) => s.expiresAt > now);
-  pruned.push({
-    hash: hashSessionToken(token),
-    expiresAt: expiresAtMs,
-    createdAt: now,
-  });
-  writeFile(config.dataDir, { sessions: pruned });
-  return { token, expiresAt: new Date(expiresAtMs).toISOString() };
+  return {
+    token,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    record: {
+      hash: hashSessionToken(token),
+      kind,
+      createdAt: now,
+      expiresAt: expiresAtMs,
+    },
+  };
+}
+
+export function issueAdminSession(
+  kind: AdminSessionKind = 'spa'
+): { token: string; expiresAt: string } {
+  const config = getActiveConfig();
+  const prepared = prepareAdminSession(kind);
+  const store = getAdminAuthStore(config.dataDir);
+  store.pruneExpired(Date.now(), 100);
+  store.insertSession(prepared.record);
+  return { token: prepared.token, expiresAt: prepared.expiresAt };
 }
 
 export type SessionVerifyResult =
   | { ok: true }
   | { ok: false; reason: 'missing' | 'invalid' | 'expired' };
 
-function hashEquals(aHex: string, bHex: string): boolean {
-  try {
-    const a = Buffer.from(aHex, 'hex');
-    const b = Buffer.from(bHex, 'hex');
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
-
-export function verifyAdminSession(token: string | null | undefined): SessionVerifyResult {
+export function verifyAdminSession(
+  token: string | null | undefined,
+  expectedKind?: AdminSessionKind
+): SessionVerifyResult {
   if (!token?.trim()) return { ok: false, reason: 'missing' };
   const trimmed = token.trim();
   if (!isHelSessionToken(trimmed)) return { ok: false, reason: 'invalid' };
 
   const config = getActiveConfig();
-  const want = hashSessionToken(trimmed);
-  const now = Date.now();
-  const file = readFile(config.dataDir);
-
-  let matched: AdminSessionRecord | undefined;
-  let matchedExpired = false;
-  const kept: AdminSessionRecord[] = [];
-
-  for (const s of file.sessions) {
-    const isMatch = hashEquals(s.hash, want);
-    if (s.expiresAt <= now) {
-      if (isMatch) matchedExpired = true;
-      continue;
-    }
-    kept.push(s);
-    if (isMatch) matched = s;
+  const store = getAdminAuthStore(config.dataDir);
+  const hash = hashSessionToken(trimmed);
+  const session = store.readSession(hash);
+  if (!session) return { ok: false, reason: 'invalid' };
+  if (session.expiresAt <= Date.now()) {
+    store.deleteSessions([hash]);
+    store.pruneExpired(Date.now(), 100);
+    return { ok: false, reason: 'expired' };
   }
-
-  if (kept.length !== file.sessions.length) {
-    writeFile(config.dataDir, { sessions: kept });
+  if (expectedKind && session.kind !== expectedKind) {
+    return { ok: false, reason: 'invalid' };
   }
+  store.pruneExpired(Date.now(), 100);
+  return { ok: true };
+}
 
-  if (matched) return { ok: true };
-  if (matchedExpired) return { ok: false, reason: 'expired' };
-  return { ok: false, reason: 'invalid' };
+export function revokeAdminSessions(tokens: Array<string | null | undefined>): number {
+  const config = getActiveConfig();
+  const hashes = tokens
+    .map((token) => token?.trim())
+    .filter((token): token is string => Boolean(token))
+    .map(hashSessionToken);
+  return getAdminAuthStore(config.dataDir).deleteSessions(hashes);
 }
 
 export function revokeAdminSession(token: string | null | undefined): boolean {
-  if (!token?.trim()) return false;
-  const config = getActiveConfig();
-  const want = hashSessionToken(token.trim());
-  const file = readFile(config.dataDir);
-  const next = file.sessions.filter((s) => !hashEquals(s.hash, want));
-  if (next.length === file.sessions.length) return false;
-  writeFile(config.dataDir, { sessions: next });
-  return true;
+  return revokeAdminSessions([token]) > 0;
 }

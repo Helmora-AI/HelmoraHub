@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
@@ -22,6 +22,7 @@ beforeAll(async () => {
   delete process.env.HELMORA_ADMIN_TOKEN;
   delete process.env.HELMORA_ADMIN_PASSWORD;
   delete process.env.CTRLHUB_ADMIN_PASSWORD;
+  process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
   delete process.env.ADMIN_PASSWORD;
 
   const config = loadConfig();
@@ -35,7 +36,9 @@ beforeAll(async () => {
   app = createApp(config);
 
   const password = 'chat-hist-password';
-  const setup = await request(app).post('/api/auth/setup').send({ password });
+  const setup = await request(app)
+    .post('/api/auth/setup')
+    .send({ password, setupToken: TEST_SETUP_TOKEN });
   if (setup.status === 200 && setup.body.token) {
     spaToken = setup.body.token;
   } else {

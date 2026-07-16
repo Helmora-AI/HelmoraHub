@@ -26,6 +26,24 @@ If a Tools-enabled Hub reports missing `helmora_connector_credentials` or
 `helmora_tool_runs`, run [`004_tools_control_plane.sql`](./004_tools_control_plane.sql).
 It is standalone, additive, and idempotent. Do not delete existing tables first.
 
+For atomic Supabase chat append/replace, run
+[`005_atomic_chat_messages.sql`](./005_atomic_chat_messages.sql) after `002`.
+The migration first checks for duplicate `(session_id, seq)` rows and aborts
+without deleting or renumbering anything if duplicates exist. Inspect duplicates
+before retrying:
+
+```sql
+select session_id, seq, count(*)
+from public.helmora_chat_messages
+group by session_id, seq
+having count(*) > 1
+order by session_id, seq;
+```
+
+Resolve each duplicate using application context and a backup, then rerun `005`.
+Only `service_role` receives execute permission on the atomic RPC functions.
+Applying this migration is an operator action; Hub never applies it automatically.
+
 **Hybrid note:** Playground chat history is stored in Hub **local SQLite workspace** (same as usage events), not in browser `localStorage`. The Supabase chat tables keep schema parity with `SupabaseConfigStore`; hybrid mode does not require `002` for Playground to work after upgrading Hub.
 
 ## Versioned copies (optional)

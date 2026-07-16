@@ -1,10 +1,10 @@
-import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getActiveConfig } from '../lib/config.js';
-import { updateAdminConfig } from '../lib/runtime-config.js';
 import {
+  adminCredentialEnvironmentManaged,
+  authDiagnosticsPayload,
   authStatusPayload,
   clearSessionCookie,
   createSessionToken,
@@ -16,6 +16,7 @@ import {
   hashPassword,
   isSetupRequired,
   setSessionCookie,
+  getSessionFromRequest,
   verifyAdminPassword,
   recoveryCredentialEnvironmentManaged,
   recoveryCredentialAvailable,
@@ -23,12 +24,21 @@ import {
 } from '../lib/admin-auth.js';
 import {
   issueAdminSession,
-  revokeAdminSession,
+  prepareAdminSession,
+  revokeAdminSessions,
 } from '../lib/admin-sessions.js';
 import { isHelSessionToken } from '../lib/hel-env.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { issueRecoverySession } from '../lib/recovery-sessions.js';
 import { getControlHealth } from '../storage/index.js';
+import {
+  getAdminAuthStore,
+  getAdminAuthStoreHealth,
+} from '../lib/admin-auth-store.js';
+import {
+  setupAttemptLimiter,
+  verifySetupToken,
+} from '../lib/setup-token.js';
 
 export const authRouter = Router();
 
@@ -87,8 +97,6 @@ function rateLimitRecoveryAuth(
   next();
 }
 
-let setupLock = false;
-
 authRouter.get('/status', (req, res) => {
   const control = getControlHealth();
   res.json({
@@ -97,7 +105,20 @@ authRouter.get('/status', (req, res) => {
   });
 });
 
-authRouter.post('/setup', rateLimitAuth, (req, res) => {
+authRouter.use((req, res, next) => {
+  if (getAdminAuthStoreHealth().ready) {
+    next();
+    return;
+  }
+  res.status(503).json({
+    error: {
+      type: 'auth_migration_incomplete',
+      message: 'Authentication storage migration is incomplete.',
+    },
+  });
+});
+
+authRouter.post('/setup', (req, res) => {
   if (!isSetupRequired()) {
     res.status(409).json({
       error: { message: 'Admin already configured', type: 'already_configured' },
@@ -105,16 +126,34 @@ authRouter.post('/setup', rateLimitAuth, (req, res) => {
     return;
   }
 
-  if (setupLock) {
-    res.status(409).json({
-      error: { message: 'Setup already in progress', type: 'setup_in_progress' },
+  const config = getActiveConfig();
+  if (config.setupTokenState !== 'valid' || !config.setupToken) {
+    res.status(503).json({
+      error: {
+        message: 'A valid HELMORA_SETUP_TOKEN is required before setup.',
+        type: 'setup_token_not_configured',
+      },
+    });
+    return;
+  }
+
+  const limit = setupAttemptLimiter.consume(
+    req.socket.remoteAddress || 'unknown'
+  );
+  if (!limit.allowed) {
+    res.setHeader('Retry-After', String(limit.retryAfterSeconds));
+    res.status(429).json({
+      error: {
+        message: 'Too many setup attempts.',
+        type: 'setup_rate_limited',
+      },
     });
     return;
   }
 
   const schema = z.object({
     password: z.string().min(8).max(200),
-    adminToken: z.string().min(16).max(200).optional(),
+    setupToken: z.string().max(512).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -122,47 +161,48 @@ authRouter.post('/setup', rateLimitAuth, (req, res) => {
     return;
   }
 
-  setupLock = true;
-  try {
-    if (!isSetupRequired()) {
-      res.status(409).json({
-        error: { message: 'Admin already configured', type: 'already_configured' },
-      });
-      return;
-    }
-
-    const config = getActiveConfig();
-    const plainToken = parsed.data.adminToken?.trim() || generateAdminToken();
-    const sessionSecret = randomBytes(32).toString('hex');
-    const recoveryToken = recoveryCredentialEnvironmentManaged()
-      ? null
-      : generateRecoveryToken();
-
-    updateAdminConfig(config.dataDir, {
-      passwordHash: hashPassword(parsed.data.password),
-      adminTokenHash: hashAdminToken(plainToken),
-      sessionSecret,
-      recoveryTokenHash: recoveryToken ? hashRecoveryToken(recoveryToken) : null,
+  if (!verifySetupToken(config.setupToken, parsed.data.setupToken)) {
+    res.status(403).json({
+      error: {
+        message: 'Setup token is invalid.',
+        type: 'setup_token_invalid',
+      },
     });
-
-    const cookieSession = createSessionToken();
-    setSessionCookie(req, res, cookieSession);
-    const spa = issueAdminSession();
-
-    res.json({
-      ok: true,
-      message: 'Admin password created. Save adminToken once; use token for SPA sessions.',
-      token: spa.token,
-      expiresAt: spa.expiresAt,
-      adminToken: plainToken,
-      ...(recoveryToken
-        ? { recoveryToken }
-        : { recoveryTokenEnvManaged: true }),
-      auth: { ...authStatusPayload(req), authenticated: true, setupRequired: false },
-    });
-  } finally {
-    setupLock = false;
+    return;
   }
+
+  const adminEnvManaged = adminCredentialEnvironmentManaged();
+  const recoveryEnvManaged = recoveryCredentialEnvironmentManaged();
+  const adminToken = adminEnvManaged ? null : generateAdminToken();
+  const recoveryToken = recoveryEnvManaged ? null : generateRecoveryToken();
+  const cookie = prepareAdminSession('cookie');
+  const spa = prepareAdminSession('spa');
+  const result = getAdminAuthStore(config.dataDir).attemptBootstrap({
+    passwordHash: hashPassword(parsed.data.password),
+    adminTokenHash: adminToken ? hashAdminToken(adminToken) : null,
+    recoveryTokenHash: recoveryToken ? hashRecoveryToken(recoveryToken) : null,
+    sessions: [cookie.record, spa.record],
+  });
+  if (!result.created) {
+    res.status(409).json({
+      error: { message: 'Admin already configured', type: 'already_configured' },
+    });
+    return;
+  }
+
+  setupAttemptLimiter.clear();
+  setSessionCookie(req, res, cookie.token);
+  res.json({
+    ok: true,
+    message: 'Admin password created. Save generated credentials now.',
+    token: spa.token,
+    expiresAt: spa.expiresAt,
+    ...(adminToken ? { adminToken } : { adminTokenEnvManaged: true }),
+    ...(recoveryToken
+      ? { recoveryToken }
+      : { recoveryTokenEnvManaged: true }),
+    auth: { ...authStatusPayload(req), authenticated: true, setupRequired: false },
+  });
 });
 
 authRouter.post('/login', rateLimitAuth, (req, res) => {
@@ -203,6 +243,12 @@ authRouter.post('/login', rateLimitAuth, (req, res) => {
 });
 
 authRouter.post('/recovery-login', rateLimitRecoveryAuth, (req, res) => {
+  if (isSetupRequired()) {
+    res.status(403).json({
+      error: { message: 'Setup required first', type: 'setup_required' },
+    });
+    return;
+  }
   if (!recoveryCredentialAvailable()) {
     res.status(503).json({
       error: {
@@ -236,9 +282,11 @@ authRouter.post('/recovery-login', rateLimitRecoveryAuth, (req, res) => {
 
 authRouter.post('/logout', (req, res) => {
   const bearer = extractAdminToken(req);
-  if (bearer && isHelSessionToken(bearer)) {
-    revokeAdminSession(bearer);
-  }
+  const cookie = getSessionFromRequest(req);
+  revokeAdminSessions([
+    bearer && isHelSessionToken(bearer) ? bearer : null,
+    cookie,
+  ]);
   clearSessionCookie(req, res);
   res.json({
     ok: true,
@@ -248,13 +296,28 @@ authRouter.post('/logout', (req, res) => {
 });
 
 authRouter.get('/me', requireAdmin, (req, res) => {
-  res.json({ ok: true, auth: authStatusPayload(req) });
+  res.json({
+    ok: true,
+    auth: {
+      ...authStatusPayload(req),
+      ...authDiagnosticsPayload(),
+    },
+  });
 });
 
 authRouter.post('/rotate-token', requireAdmin, (req, res) => {
   const config = getActiveConfig();
+  if (adminCredentialEnvironmentManaged()) {
+    res.status(409).json({
+      error: {
+        message: 'The admin token is managed by HELMORA_ADMIN_TOKEN.',
+        type: 'admin_token_env_managed',
+      },
+    });
+    return;
+  }
   const plainToken = generateAdminToken();
-  updateAdminConfig(config.dataDir, {
+  getAdminAuthStore(config.dataDir).upsertIdentity({
     adminTokenHash: hashAdminToken(plainToken),
   });
   res.json({
@@ -278,7 +341,7 @@ authRouter.post('/rotate-recovery-token', requireAdmin, (_req, res) => {
 
   const config = getActiveConfig();
   const recoveryToken = generateRecoveryToken();
-  updateAdminConfig(config.dataDir, {
+  getAdminAuthStore(config.dataDir).upsertIdentity({
     recoveryTokenHash: hashRecoveryToken(recoveryToken),
   });
   res.json({ ok: true, recoveryToken });
@@ -303,7 +366,7 @@ authRouter.put('/password', requireAdmin, (req, res) => {
   }
 
   const config = getActiveConfig();
-  updateAdminConfig(config.dataDir, {
+  getAdminAuthStore(config.dataDir).upsertIdentity({
     passwordHash: hashPassword(parsed.data.newPassword),
   });
 

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import request from './test-request.js';
-import { loadConfig, setActiveConfig } from '../lib/config.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
+import { getActiveConfig, loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
 import { costForModel, averageModelCosts, getPricingForModel } from '../pricing/cost.js';
@@ -26,6 +26,7 @@ beforeAll(async () => {
   delete process.env.HELMORA_ADMIN_TOKEN;
   delete process.env.CTRLHUB_ADMIN_PASSWORD;
   delete process.env.CTRLHUB_ADMIN_TOKEN;
+  process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -33,6 +34,7 @@ beforeAll(async () => {
   config.storageChoice = 'local';
   config.storageBackend = 'sqlite';
   config.encryptionKey = 'test-encryption-key-api-keys';
+  config.corsOrigins = ['https://admin.example'];
   setActiveConfig(config);
   await initStorage(config);
   const store = getConfigStore();
@@ -49,7 +51,7 @@ beforeAll(async () => {
 
   const setup = await request(app)
     .post('/api/auth/setup')
-    .send({ password: 'keys-admin-password' });
+    .send({ password: 'keys-admin-password', setupToken: TEST_SETUP_TOKEN });
   expect(setup.status).toBe(200);
   adminToken = setup.body.adminToken;
 
@@ -112,7 +114,9 @@ describe('multi-key /v1', () => {
   });
 
   it('never accepts a recovery credential as a model API key', async () => {
-    process.env.HELMORA_RECOVERY_TOKEN = clientKey;
+    const config = getActiveConfig();
+    const previousRecoveryToken = config.recoveryTokenEnv;
+    config.recoveryTokenEnv = clientKey;
     try {
       const res = await request(app)
         .post('/v1/chat/completions')
@@ -124,7 +128,7 @@ describe('multi-key /v1', () => {
       expect(res.status).toBe(401);
       expect(res.body.error.type).toBe('invalid_api_key');
     } finally {
-      delete process.env.HELMORA_RECOVERY_TOKEN;
+      config.recoveryTokenEnv = previousRecoveryToken;
     }
   });
 

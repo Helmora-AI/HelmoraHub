@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage } from '../storage/index.js';
 import { createApp } from '../app.js';
@@ -22,6 +22,7 @@ beforeAll(async () => {
   delete process.env.HELMORA_API_KEY;
   delete process.env.HELMORA_ADMIN_PASSWORD;
   delete process.env.HELMORA_ADMIN_TOKEN;
+  process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -62,7 +63,7 @@ describe('Admin auth', () => {
   it('POST /api/auth/setup creates password + admin token', async () => {
     const res = await request(app)
       .post('/api/auth/setup')
-      .send({ password: 'test-admin-password' });
+      .send({ password: 'test-admin-password', setupToken: TEST_SETUP_TOKEN });
     expect(res.status).toBe(200);
     expect(res.body.adminToken).toMatch(/^helmora-admin-/);
     adminToken = res.body.adminToken;
@@ -72,7 +73,7 @@ describe('Admin auth', () => {
   it('rejects second setup', async () => {
     const res = await request(app)
       .post('/api/auth/setup')
-      .send({ password: 'another-password-xx' });
+      .send({ password: 'another-password-xx', setupToken: TEST_SETUP_TOKEN });
     expect(res.status).toBe(409);
   });
 

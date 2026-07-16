@@ -34,6 +34,11 @@ function configFor(dir: string): Config {
   config.upstreamBaseUrl = null;
   config.upstreamApiKey = null;
   config.upstreamModel = null;
+  // These storage boot fixtures model an already configured operator install.
+  // Auth environment values are normally snapshotted at process startup, so
+  // reflect the fixture's current process values explicitly.
+  config.adminPasswordEnv = 'test-hybrid-boot-admin-password';
+  config.recoveryTokenEnv = process.env.HELMORA_RECOVERY_TOKEN?.trim() || null;
   return config;
 }
 

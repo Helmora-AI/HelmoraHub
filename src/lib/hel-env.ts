@@ -38,6 +38,7 @@ export const HEL_RECOVERY_TOKEN_PREFIX = 'helmora-recovery-token-';
 export const HEL_RECOVERY_SESSION_PREFIX = 'helmora_recovery_session_';
 
 export const HEL_COOKIE_NAME = 'helmora_sid';
+export const HEL_SECURE_COOKIE_NAME = '__Host-helmora_sid';
 export const LEGACY_COOKIE_NAME = 'ctrlhub_sid';
 
 export const HEL_DB_FILE = 'helmora.db';

@@ -76,6 +76,8 @@ migration, and rollback notes: [`docs/deploy.md`](docs/deploy.md).
 git clone https://github.com/Helmora-AI/HelmoraHub.git
 cd HelmoraHub
 cp .env.example .env
+# Put this generated value in .env as HELMORA_SETUP_TOKEN before first boot:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 npm install
 npm run dev
 ```
@@ -96,6 +98,40 @@ cd HelmoraHub-Frontend
 npm install
 npm run dev
 ```
+
+## Secure first-run contract
+
+- Every unconfigured Hub requires `HELMORA_SETUP_TOKEN`, including localhost.
+  Missing or weak configuration keeps `/health` live, makes `/ready` return
+  `503`, and makes setup unavailable until configuration is repaired.
+- Setup attempts are limited for 15 minutes to 10 per socket source and 100 per
+  Hub process. `Retry-After` reports the applicable reset. The limiter is
+  intentionally process-local; the strong token and SQLite compare-and-set are
+  the authorization and correctness boundaries.
+- Configure exact browser origins with `HELMORA_PUBLIC_URL`,
+  `HELMORA_FRONTEND_URL`, and optional comma-separated
+  `HELMORA_CORS_ORIGINS`. Wildcards and trust inferred from proxy/request
+  headers are rejected. Server clients without `Origin` remain supported.
+- Setup shows each locally generated admin/recovery token once. An
+  environment-managed token is identified without echoing or generating a
+  shadowed local value. Save generated credentials before acknowledging.
+- If setup commits but the response is lost, sign in using the chosen password,
+  then rotate the locally managed admin/recovery tokens. Setup is not replayed.
+- Environment credentials shadow the corresponding local credential for the
+  current process without deleting it. After removing an environment value and
+  restarting, the prior local credential returns; rotate it first if its origin
+  is uncertain.
+- The auth-store migration removes legacy auth hashes/raw session material from
+  runtime config and invalidates old signed cookies once. An interrupted cleanup
+  fails auth/readiness closed and resumes on restart rather than reading two
+  stores.
+- Auth JSON is limited to 16 KiB and normal control JSON to 256 KiB; both reject
+  non-identity `Content-Encoding` with `415`. Chat/vision retains a 10 MiB limit
+  measured after decompression.
+
+For an existing Supabase deployment, apply migrations in order through
+`sql/migrations/005_atomic_chat_messages.sql`. Run its duplicate preflight and
+resolve duplicates from a backup; Hub never applies production migrations.
 
 ## Deploy
 
@@ -155,6 +191,10 @@ npm run build && npm start
 npm run start:ptero
 npm run docker:up
 ```
+
+GitHub Actions reproduces the locked Node 22 gate with `npm ci`, `npm test`,
+`npm run typecheck`, `npm run build`, and a high-severity runtime dependency
+audit. Unit tests set `NODE_ENV=test` and do not read the developer's `.env`.
 
 ## License
 

@@ -1,6 +1,5 @@
 import {
   createHash,
-  createHmac,
   randomBytes,
   scryptSync,
   timingSafeEqual,
@@ -8,10 +7,10 @@ import {
 import type { Request, Response } from 'express';
 import { getActiveConfig } from './config.js';
 import {
-  helEnv,
   HEL_ADMIN_TOKEN_PREFIX,
   HEL_COOKIE_NAME,
   HEL_RECOVERY_TOKEN_PREFIX,
+  HEL_SECURE_COOKIE_NAME,
   LEGACY_COOKIE_NAME,
   isHelRecoverySessionToken,
   isHelRecoveryToken,
@@ -19,13 +18,19 @@ import {
 } from './hel-env.js';
 import {
   readRuntimeConfig,
-  updateAdminConfig,
   type AdminAuthConfig,
 } from './runtime-config.js';
 import { timingSafeEqualString } from './auth.js';
-import { verifyAdminSession } from './admin-sessions.js';
+import {
+  issueAdminSession,
+  sessionTtlSec,
+  verifyAdminSession,
+} from './admin-sessions.js';
+import {
+  getAdminAuthStore,
+  getAdminAuthStoreHealth,
+} from './admin-auth-store.js';
 
-const SESSION_TTL_SEC = 60 * 60 * 24 * 7;
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
@@ -58,12 +63,19 @@ function equalHexHash(actual: string, expected: string): boolean {
   }
 }
 
+export function adminCredentialEnvironmentManaged(): boolean {
+  return Boolean(getActiveConfig().adminTokenEnv);
+}
+
 export function recoveryCredentialEnvironmentManaged(): boolean {
-  return Boolean(helEnv('RECOVERY_TOKEN'));
+  return Boolean(getActiveConfig().recoveryTokenEnv);
 }
 
 export function recoveryCredentialAvailable(): boolean {
-  if (recoveryCredentialEnvironmentManaged()) return true;
+  if (!getAdminAuthStoreHealth().ready) return false;
+  if (isSetupRequired()) return false;
+  const config = getActiveConfig();
+  if (config.recoveryTokenEnv) return true;
   return Boolean(getAdminAuthConfig().recoveryTokenHash);
 }
 
@@ -71,16 +83,19 @@ export function isRecoveryCredentialToken(token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) return false;
   if (isHelRecoveryToken(trimmed) || isHelRecoverySessionToken(trimmed)) return true;
-  const fromEnv = helEnv('RECOVERY_TOKEN');
-  if (!fromEnv) return false;
-  return equalHexHash(hashRecoveryToken(trimmed), hashRecoveryToken(fromEnv));
+  const fromEnv = getActiveConfig().recoveryTokenEnv;
+  return fromEnv
+    ? equalHexHash(hashRecoveryToken(trimmed), hashRecoveryToken(fromEnv))
+    : false;
 }
 
 export function verifyRecoveryCredential(token: string): boolean {
+  if (!getAdminAuthStoreHealth().ready) return false;
+  if (isSetupRequired()) return false;
   const trimmed = token.trim();
   if (!trimmed) return false;
   const actual = hashRecoveryToken(trimmed);
-  const fromEnv = helEnv('RECOVERY_TOKEN');
+  const fromEnv = getActiveConfig().recoveryTokenEnv;
   if (fromEnv) return equalHexHash(actual, hashRecoveryToken(fromEnv));
 
   const expected = getAdminAuthConfig().recoveryTokenHash;
@@ -116,93 +131,71 @@ export function verifyPassword(password: string, stored: string): boolean {
   }
 }
 
+/**
+ * Transitional reader for legacy files. AD-1C removes this fallback once the
+ * durable one-time migration has completed.
+ */
 export function getAdminAuthConfig(): AdminAuthConfig {
   const config = getActiveConfig();
+  if (!getAdminAuthStoreHealth().ready) {
+    return {
+      passwordHash: null,
+      adminTokenHash: null,
+      recoveryTokenHash: null,
+      sessionSecret: null,
+    };
+  }
+  const identity = getAdminAuthStore(config.dataDir).readIdentity();
+  if (identity) {
+    return {
+      passwordHash: identity.passwordHash,
+      adminTokenHash: identity.adminTokenHash,
+      recoveryTokenHash: identity.recoveryTokenHash,
+      sessionSecret: null,
+    };
+  }
   return readRuntimeConfig(config.dataDir).admin;
 }
 
 export function isSetupRequired(): boolean {
-  const admin = getAdminAuthConfig();
-  if (admin.passwordHash) return false;
-  if (helEnv('ADMIN_PASSWORD')) return false;
-  return true;
+  if (!getAdminAuthStoreHealth().ready) return true;
+  const config = getActiveConfig();
+  if (config.adminPasswordEnv) return false;
+  return !getAdminAuthConfig().passwordHash;
 }
 
 export function verifyAdminPassword(password: string): boolean {
-  const admin = getAdminAuthConfig();
-  if (admin.passwordHash) return verifyPassword(password, admin.passwordHash);
-  const fromEnv = helEnv('ADMIN_PASSWORD');
-  if (fromEnv) return timingSafeEqualString(password, fromEnv);
-  return false;
+  if (!getAdminAuthStoreHealth().ready) return false;
+  const config = getActiveConfig();
+  if (config.adminPasswordEnv) {
+    return timingSafeEqualString(password, config.adminPasswordEnv);
+  }
+  const local = getAdminAuthConfig().passwordHash;
+  return local ? verifyPassword(password, local) : false;
 }
 
 export function verifyAdminTokenPlain(token: string): boolean {
+  if (!getAdminAuthStoreHealth().ready) return false;
+  if (isSetupRequired()) return false;
   const trimmed = token.trim();
   if (!trimmed) return false;
   if (isRecoveryCredentialToken(trimmed) || verifyRecoveryCredential(trimmed)) {
     return false;
   }
 
-  const fromEnv = helEnv('ADMIN_TOKEN');
-  if (fromEnv && timingSafeEqualString(trimmed, fromEnv)) return true;
+  const fromEnv = getActiveConfig().adminTokenEnv;
+  if (fromEnv) return timingSafeEqualString(trimmed, fromEnv);
 
-  const admin = getAdminAuthConfig();
-  if (!admin.adminTokenHash) return false;
-  const actual = hashAdminToken(trimmed);
-  try {
-    const a = Buffer.from(actual, 'hex');
-    const b = Buffer.from(admin.adminTokenHash, 'hex');
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  const expected = getAdminAuthConfig().adminTokenHash;
+  return expected ? equalHexHash(hashAdminToken(trimmed), expected) : false;
 }
-
-function resolveSessionSecret(): string {
-  const admin = getAdminAuthConfig();
-  if (admin.sessionSecret) return admin.sessionSecret;
-  const fromEnv = helEnv('SESSION_SECRET') || process.env.ENCRYPTION_KEY?.trim();
-  if (fromEnv) return fromEnv;
-  return 'helmora-dev-session-secret';
-}
-
-export function ensureSessionSecret(): string {
-  const config = getActiveConfig();
-  const admin = getAdminAuthConfig();
-  if (admin.sessionSecret) return admin.sessionSecret;
-  const secret = randomBytes(32).toString('hex');
-  updateAdminConfig(config.dataDir, { sessionSecret: secret });
-  return secret;
-}
-
-type SessionPayload = { iat: number; exp: number };
 
 export function createSessionToken(): string {
-  const secret = ensureSessionSecret();
-  const now = Math.floor(Date.now() / 1000);
-  const payload: SessionPayload = { iat: now, exp: now + SESSION_TTL_SEC };
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${sig}`;
+  return issueAdminSession('cookie').token;
 }
 
 export function verifySessionToken(token: string | null | undefined): boolean {
-  if (!token) return false;
-  const [body, sig] = token.split('.');
-  if (!body || !sig) return false;
-  const secret = resolveSessionSecret();
-  const expected = createHmac('sha256', secret).update(body).digest('base64url');
-  if (!timingSafeEqualString(sig, expected)) return false;
-  try {
-    const payload = JSON.parse(
-      Buffer.from(body, 'base64url').toString('utf8')
-    ) as SessionPayload;
-    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return false;
-    return true;
-  } catch {
-    return false;
-  }
+  return verifyAdminSession(token, 'cookie').ok;
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -211,16 +204,21 @@ export function parseCookies(header: string | undefined): Record<string, string>
   for (const part of header.split(';')) {
     const idx = part.indexOf('=');
     if (idx < 0) continue;
-    const k = part.slice(0, idx).trim();
-    const v = part.slice(idx + 1).trim();
-    if (k) out[k] = decodeURIComponent(v);
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key) out[key] = decodeURIComponent(value);
   }
   return out;
 }
 
 export function getSessionFromRequest(req: Request): string | null {
   const cookies = parseCookies(req.header('cookie'));
-  return cookies[HEL_COOKIE_NAME] || cookies[LEGACY_COOKIE_NAME] || null;
+  return (
+    cookies[HEL_SECURE_COOKIE_NAME] ||
+    cookies[HEL_COOKIE_NAME] ||
+    cookies[LEGACY_COOKIE_NAME] ||
+    null
+  );
 }
 
 export function extractAdminToken(req: Request): string | null {
@@ -233,68 +231,103 @@ export function extractAdminToken(req: Request): string | null {
 }
 
 export function isAdminAuthenticated(req: Request): boolean {
+  if (isSetupRequired()) return false;
   if (verifySessionToken(getSessionFromRequest(req))) return true;
   const token = extractAdminToken(req);
   if (!token) return false;
   if (verifyAdminTokenPlain(token)) return true;
-  // Opaque SPA sessions checked in requireAdmin (needs expired vs invalid)
-  return false;
+  return isHelSessionToken(token) && verifyAdminSession(token, 'spa').ok;
 }
 
-function cookieSecure(req: Request): boolean {
-  const raw = helEnv('COOKIE_SECURE');
-  if (raw === '1') return true;
-  if (raw === '0') return false;
-  const proto = (req.header('x-forwarded-proto') || '').split(',')[0]?.trim();
-  return proto === 'https';
-}
-
-export function setSessionCookie(req: Request, res: Response, token: string): void {
+function serializeCookie(
+  name: string,
+  value: string,
+  maxAge: number,
+  secure: boolean
+): string {
   const parts = [
-    `${HEL_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    `${name}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
-    `Max-Age=${SESSION_TTL_SEC}`,
+    `Max-Age=${maxAge}`,
   ];
-  if (cookieSecure(req)) parts.push('Secure');
-  res.append('Set-Cookie', parts.join('; '));
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
 }
 
-export function clearSessionCookie(req: Request, res: Response): void {
-  const parts = [
-    `${HEL_COOKIE_NAME}=`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    'Max-Age=0',
-  ];
-  if (cookieSecure(req)) parts.push('Secure');
-  res.append('Set-Cookie', parts.join('; '));
+export function setSessionCookie(_req: Request, res: Response, token: string): void {
+  const config = getActiveConfig();
+  const name = config.cookieSecure ? HEL_SECURE_COOKIE_NAME : HEL_COOKIE_NAME;
+  res.append(
+    'Set-Cookie',
+    serializeCookie(name, token, sessionTtlSec(), config.cookieSecure)
+  );
+}
+
+export function clearSessionCookie(_req: Request, res: Response): void {
+  res.append(
+    'Set-Cookie',
+    serializeCookie(HEL_SECURE_COOKIE_NAME, '', 0, true)
+  );
+  res.append('Set-Cookie', serializeCookie(HEL_COOKIE_NAME, '', 0, false));
+  res.append('Set-Cookie', serializeCookie(LEGACY_COOKIE_NAME, '', 0, false));
 }
 
 export function authStatusPayload(req: Request) {
-  const admin = getAdminAuthConfig();
+  const config = getActiveConfig();
+  const storeHealth = getAdminAuthStoreHealth();
   const setupRequired = isSetupRequired();
-  let authenticated = false;
-  if (!setupRequired) {
-    if (verifySessionToken(getSessionFromRequest(req))) authenticated = true;
-    else {
-      const token = extractAdminToken(req);
-      if (token && verifyAdminTokenPlain(token)) authenticated = true;
-      else if (token && isHelSessionToken(token)) {
-        authenticated = verifyAdminSession(token).ok;
-      }
-    }
-  }
+  const setupAvailable =
+    !setupRequired ||
+    (storeHealth.ready && config.setupTokenState === 'valid');
   return {
     setupRequired,
-    authenticated,
-    hasAdminToken: Boolean(admin.adminTokenHash || helEnv('ADMIN_TOKEN')),
-    envPassword: Boolean(helEnv('ADMIN_PASSWORD')),
-    envAdminToken: Boolean(helEnv('ADMIN_TOKEN')),
-    recoveryAvailable: recoveryCredentialAvailable(),
+    authenticated: setupRequired ? false : isAdminAuthenticated(req),
+    setupTokenRequired: setupRequired,
+    setupAvailable,
+    ...(!setupAvailable
+      ? {
+          setupUnavailableReason: storeHealth.ready
+            ? 'setup_token_not_configured'
+            : 'auth_migration_incomplete',
+        }
+      : {}),
   };
 }
 
-export { HEL_COOKIE_NAME as COOKIE_NAME, SESSION_TTL_SEC };
+export function authDiagnosticsPayload() {
+  const config = getActiveConfig();
+  const local = getAdminAuthConfig();
+  const authSources = {
+    password: config.adminPasswordEnv
+      ? 'environment'
+      : local.passwordHash
+        ? 'local'
+        : 'none',
+    adminToken: config.adminTokenEnv
+      ? 'environment'
+      : local.adminTokenHash
+        ? 'local'
+        : 'none',
+    recoveryToken: config.recoveryTokenEnv
+      ? 'environment'
+      : local.recoveryTokenHash
+        ? 'local'
+        : 'none',
+  } as const;
+  return {
+    authSources,
+    localAuthShadowed: Boolean(
+      (config.adminPasswordEnv && local.passwordHash) ||
+        (config.adminTokenEnv && local.adminTokenHash) ||
+        (config.recoveryTokenEnv && local.recoveryTokenHash)
+    ),
+    authStoreMigrationVersion: getAdminAuthStoreHealth().migrationVersion,
+  };
+}
+
+export {
+  HEL_COOKIE_NAME as COOKIE_NAME,
+  HEL_SECURE_COOKIE_NAME as SECURE_COOKIE_NAME,
+};

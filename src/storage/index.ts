@@ -10,6 +10,10 @@ import {
 import { MemoryRateStore, RedisRateStore } from './rate-store.js';
 import type { ConfigStore, RateStore, StorageBundle } from './types.js';
 import { recoveryCredentialAvailable } from '../lib/admin-auth.js';
+import {
+  closeAdminAuthStore,
+  initializeAdminAuthStore,
+} from '../lib/admin-auth-store.js';
 
 let bundle: StorageBundle | null = null;
 let controlProbeTimer: NodeJS.Timeout | null = null;
@@ -84,6 +88,7 @@ export async function initStorage(
 
   bundle = { config: configStore, rate: rateStore };
   setActiveConfig(config);
+  initializeAdminAuthStore(config.dataDir);
   return bundle;
 }
 
@@ -183,7 +188,9 @@ export function getRateStore(): RateStore {
 
 export async function closeStorage(): Promise<void> {
   await stopControlPlaneProbeLoop();
-  if (!bundle) return;
-  await Promise.all([bundle.config.close(), bundle.rate.close()]);
-  bundle = null;
+  if (bundle) {
+    await Promise.all([bundle.config.close(), bundle.rate.close()]);
+    bundle = null;
+  }
+  closeAdminAuthStore();
 }

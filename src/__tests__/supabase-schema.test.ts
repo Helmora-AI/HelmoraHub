@@ -90,6 +90,43 @@ describe('supabase-schema helpers', () => {
     expect(sql).not.toContain('truncate');
   });
 
+  it('ships atomic service-role-only chat RPCs in canonical schema and migration 005', () => {
+    const canonical = fs.readFileSync(
+      path.resolve(process.cwd(), 'sql/supabase-schema.sql'),
+      'utf8'
+    ).toLowerCase();
+    const migration = fs.readFileSync(
+      path.resolve(process.cwd(), 'sql/migrations/005_atomic_chat_messages.sql'),
+      'utf8'
+    ).toLowerCase();
+
+    for (const sql of [canonical, migration]) {
+      expect(sql).toContain('chat_session_not_found');
+      expect(sql).toContain('for update');
+      expect(sql).toContain('helmora_chat_messages_session_seq_uidx');
+      expect(sql).toContain('create or replace function public.append_chat_message_atomic');
+      expect(sql).toContain('create or replace function public.replace_chat_messages_atomic');
+      expect(sql).toContain('security invoker');
+      expect(sql).toContain("set search_path = ''");
+      expect(sql).toContain(
+        'revoke all on function public.append_chat_message_atomic(text, jsonb) from public, anon, authenticated'
+      );
+      expect(sql).toContain(
+        'revoke all on function public.replace_chat_messages_atomic(text, jsonb) from public, anon, authenticated'
+      );
+      expect(sql).toContain(
+        'grant execute on function public.append_chat_message_atomic(text, jsonb) to service_role'
+      );
+      expect(sql).toContain(
+        'grant execute on function public.replace_chat_messages_atomic(text, jsonb) to service_role'
+      );
+      expect(sql).not.toContain('delete from public.helmora_chat_messages\n  where session_id = p_session_id;\n\n  -- validate');
+      expect(sql).not.toMatch(/\bexecute\s+(?:format\s*\(|['$])/);
+    }
+    expect(migration).toContain('duplicate (session_id, seq) rows');
+    expect(migration).not.toContain('truncate ');
+  });
+
   it('exposes API hints', () => {
     const hints = supabaseSchemaApiHints();
     expect(hints.path).toBe('sql/supabase-schema.sql');

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Express } from 'express';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { createApp } from '../app.js';
 import { closeStorage, getConfigStore, initStorage } from '../storage/index.js';
@@ -24,6 +24,7 @@ describe('Tools admin API', () => {
     process.env.ENCRYPTION_KEY = 'tools-admin-test-encryption-key';
     delete process.env.HELMORA_ADMIN_PASSWORD;
     delete process.env.HELMORA_ADMIN_TOKEN;
+    process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
 
     const config = loadConfig();
     config.dataDir = tmpDir;
@@ -49,7 +50,10 @@ describe('Tools admin API', () => {
 
     const setup = await request(app)
       .post('/api/auth/setup')
-      .send({ password: 'tools-admin-test-password' });
+      .send({
+        password: 'tools-admin-test-password',
+        setupToken: TEST_SETUP_TOKEN,
+      });
     adminToken = setup.body.adminToken;
   });
 

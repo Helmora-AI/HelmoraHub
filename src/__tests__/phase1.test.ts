@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { getUnifiedApiKey, setActiveMode } from '../db/index.js';
@@ -28,6 +28,7 @@ beforeAll(async () => {
   delete process.env.REDIS_URL;
   delete process.env.HELMORA_ADMIN_PASSWORD;
   delete process.env.HELMORA_ADMIN_TOKEN;
+  process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -54,7 +55,7 @@ beforeAll(async () => {
 
   const setup = await request(app)
     .post('/api/auth/setup')
-    .send({ password: 'phase1-admin-password' });
+    .send({ password: 'phase1-admin-password', setupToken: TEST_SETUP_TOKEN });
   if (setup.status !== 200) {
     throw new Error(`admin setup failed: ${JSON.stringify(setup.body)}`);
   }

@@ -1,9 +1,11 @@
 /**
  * Public API documentation catalog — served at GET /docs.json
  */
+import { HUB_VERSION } from '../lib/version.js';
+
 export const DOCS_CATALOG = {
   name: 'Helmora AI',
-  version: '0.1.16',
+  version: HUB_VERSION,
   openai_compatible: true,
   base_paths: {
     v1: '/v1',

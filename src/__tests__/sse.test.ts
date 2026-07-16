@@ -27,6 +27,7 @@ beforeAll(async () => {
   config.storageChoice = 'local';
   config.storageBackend = 'sqlite';
   config.encryptionKey = 'test-encryption-key-sse';
+  config.corsOrigins = ['https://admin.example'];
   setActiveConfig(config);
   await initStorage(config);
   app = createApp(config);
@@ -65,6 +66,7 @@ describe('SSE streaming', () => {
   it('streams demo chunks then [DONE]', async () => {
     const res = await request(app)
       .post('/v1/chat/completions')
+      .set('Origin', 'https://admin.example')
       .set('Authorization', `Bearer ${apiKey}`)
       .send({
         model: 'auto',
@@ -133,6 +135,7 @@ describe('SSE streaming', () => {
   it('sets SSE headers used by proxies / coding clients', async () => {
     const res = await request(app)
       .post('/v1/chat/completions')
+      .set('Origin', 'https://admin.example')
       .set('Authorization', `Bearer ${apiKey}`)
       .send({
         model: 'auto',

@@ -181,6 +181,7 @@ settingsRouter.put('/storage', async (req, res, next) => {
     }
 
     const nextRuntime: RuntimeConfigFile = {
+      authStoreMigrationVersion: prev.authStoreMigrationVersion,
       storageChoice: body.storageChoice as StorageChoice,
       supabaseUrl:
         body.supabaseUrl !== undefined ? body.supabaseUrl : prev.supabaseUrl,

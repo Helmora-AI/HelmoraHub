@@ -6,6 +6,7 @@ import {
 } from '../lib/admin-auth.js';
 import { isHelSessionToken } from '../lib/hel-env.js';
 import { verifyAdminSession } from '../lib/admin-sessions.js';
+import { getAdminAuthStoreHealth } from '../lib/admin-auth-store.js';
 
 /**
  * SPA admin session only — rejects /v1 consumer keys and long-lived admin tokens.
@@ -15,6 +16,15 @@ export function requireAdminSession(
   res: Response,
   next: NextFunction
 ): void {
+  if (!getAdminAuthStoreHealth().ready) {
+    res.status(503).json({
+      error: {
+        message: 'Authentication storage migration is incomplete.',
+        type: 'auth_migration_incomplete',
+      },
+    });
+    return;
+  }
   if (isSetupRequired()) {
     res.status(403).json({
       error: {
@@ -28,7 +38,7 @@ export function requireAdminSession(
 
   const bearer = extractAdminToken(req);
   if (bearer && isHelSessionToken(bearer)) {
-    const result = verifyAdminSession(bearer);
+    const result = verifyAdminSession(bearer, 'spa');
     if (result.ok) {
       next();
       return;

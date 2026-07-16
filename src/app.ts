@@ -1,7 +1,7 @@
 import express from 'express';
-import cors from 'cors';
 import helmet from 'helmet';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from './lib/config.js';
@@ -20,60 +20,176 @@ import { toolsRouter } from './routes/tools.js';
 import { recoveryRouter } from './routes/recovery.js';
 import './oauth/handlers/index.js';
 import { DOCS_CATALOG } from './docs/catalog.js';
+import { HUB_VERSION } from './lib/version.js';
+import { browserOriginPolicy } from './lib/origin-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp(_config: Config) {
-  const app = express();
+function resolvePublicDir(): string | undefined {
+  const candidates = [
+    path.join(__dirname, 'public'),
+    path.join(__dirname, '..', 'public'),
+  ];
+  return candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  });
+}
 
-  app.use(helmet({ contentSecurityPolicy: false, hsts: false }));
-  app.use(
-    cors({
-      origin: true,
-      credentials: true,
-      maxAge: 600,
-      optionsSuccessStatus: 204,
-      allowedHeaders: [
-        'Accept',
-        'Authorization',
-        'Content-Type',
-        'X-Admin-Token',
-        'X-API-Key',
-        'X-Ctrl-Mode',
-        'X-CtrlHub-Mode',
-        'X-Helmora-Identity',
-        'X-Helmora-Mode',
-        'X-Helmora-Tools',
-      ],
-      exposedHeaders: [
-        'X-Helmora-Identity',
-        'X-Helmora-Mini-Role',
-        'X-Helmora-Mini-Slot',
-        'X-Ctrl-Meta-Model',
-        'X-Routed-Via',
-      ],
-    })
-  );
-  app.use(express.json({ limit: '10mb' }));
+function inlineAssetHashes(publicDir: string | undefined): {
+  scripts: string[];
+  styles: string[];
+} {
+  if (!publicDir) return { scripts: [], styles: [] };
+  const scripts = new Set<string>();
+  const styles = new Set<string>();
+  const hash = (value: string) =>
+    `'sha256-${crypto.createHash('sha256').update(value).digest('base64')}'`;
+  for (const name of fs.readdirSync(publicDir)) {
+    if (!name.endsWith('.html')) continue;
+    const html = fs.readFileSync(path.join(publicDir, name), 'utf8');
+    for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)) {
+      if (match[1]) scripts.add(hash(match[1]));
+    }
+    for (const match of html.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/gi)) {
+      if (match[1]) styles.add(hash(match[1]));
+    }
+  }
+  return { scripts: [...scripts], styles: [...styles] };
+}
+
+function authResponseHeaders(
+  _req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+}
+
+type BodyParserError = Error & {
+  status?: number;
+  statusCode?: number;
+  type?: string;
+};
+
+export function publicErrorHandler(
+  err: unknown,
+  _req: express.Request,
+  res: express.Response,
+  _next: express.NextFunction
+) {
+  const parserError = err as BodyParserError;
+
+  if (parserError?.type === 'encoding.unsupported') {
+    res.status(415).json({
+      error: {
+        type: 'unsupported_content_encoding',
+        message: 'Compressed request bodies are not supported for this endpoint.',
+      },
+    });
+    return;
+  }
+  if (parserError?.type === 'entity.too.large') {
+    res.status(413).json({
+      error: {
+        type: 'payload_too_large',
+        message: 'Request body exceeds the allowed size.',
+      },
+    });
+    return;
+  }
+  if (parserError?.type === 'entity.parse.failed') {
+    res.status(400).json({
+      error: {
+        type: 'invalid_json',
+        message: 'Request body is not valid JSON.',
+      },
+    });
+    return;
+  }
+  if (
+    typeof parserError?.status === 'number' &&
+    parserError.status >= 400 &&
+    parserError.status < 500
+  ) {
+    res.status(parserError.status).json({
+      error: {
+        type: 'invalid_request',
+        message: 'Request could not be processed.',
+      },
+    });
+    return;
+  }
+
+  // Arbitrary error messages and request bodies may contain credentials.
+  console.error('[helmora] unexpected request error', {
+    name: err instanceof Error ? err.name : 'UnknownError',
+  });
+  res.status(500).json({
+    error: {
+      type: 'internal_error',
+      message: 'An unexpected internal error occurred.',
+    },
+  });
+}
+
+export function createApp(config: Config) {
+  const app = express();
+  const publicDir = resolvePublicDir();
+  const cspHashes = inlineAssetHashes(publicDir);
+
+  const authJson = express.json({ limit: '16kb', inflate: false });
+  const controlJson = express.json({ limit: '256kb', inflate: false });
+  const chatAndVisionJson = express.json({ limit: '10mb' });
+
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        imgSrc: ["'self'", 'data:'],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'", ...cspHashes.scripts],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: ["'self'", ...cspHashes.styles],
+        styleSrcAttr: ["'none'"],
+      },
+    },
+  }));
+  app.use(browserOriginPolicy(config.corsOrigins));
 
   // Claw3D custom runtime contract (no API key — Studio probes these)
   app.use(runtimeRouter);
 
   // OpenAI-compatible surface (hel_dev_ / hel_pro_ keys; legacy ctrl_* accepted)
-  app.use('/v1', requireControlSnapshot, v1Router);
+  app.use('/v1', chatAndVisionJson, requireControlSnapshot, v1Router);
 
   // Auth bootstrap / login (public subset)
-  app.use('/api/auth', authRouter);
-
-  // Recovery sessions are bearer-only and restricted to an exact method/path allowlist.
-  app.use('/api', recoveryRouter);
+  app.use('/api/auth', authResponseHeaders, authJson, authRouter);
 
   // Admin Chat — SPA session only (before broad /api requireAdmin)
-  app.use('/api/chat', requireControlSnapshot, chatRouter);
+  app.use('/api/chat', chatAndVisionJson, requireControlSnapshot, chatRouter);
 
   // OAuth — callback is public; start/refresh/disconnect use their own middleware
   // Mount before broad /api requireAdmin so GET /callback stays unauthenticated.
-  app.use('/api/oauth', requireControlSnapshot, oauthRouter);
+  app.use('/api/oauth', controlJson, requireControlSnapshot, oauthRouter);
+
+  // The remaining control plane uses a smaller, uncompressed JSON contract.
+  app.use('/api', controlJson);
+
+  // Recovery sessions are bearer-only and restricted to an exact method/path allowlist.
+  app.use('/api', recoveryRouter);
 
   // Control plane — admin session cookie or admin bearer token
   app.use('/api/keys', requireControlSnapshot, requireAdmin, keysRouter);
@@ -83,18 +199,6 @@ export function createApp(_config: Config) {
   app.use('/api/office', requireControlSnapshot, requireAdmin, officeRouter);
   app.use('/api/tools', requireControlSnapshot, requireAdmin, toolsRouter);
   app.use('/api', requireControlSnapshot, requireAdmin, adminRouter);
-
-  const publicCandidates = [
-    path.join(__dirname, 'public'),
-    path.join(__dirname, '..', 'public'),
-  ];
-  const publicDir = publicCandidates.find((p) => {
-    try {
-      return fs.existsSync(p);
-    } catch {
-      return false;
-    }
-  });
 
   if (publicDir) {
     app.use('/public', express.static(publicDir));
@@ -126,7 +230,7 @@ export function createApp(_config: Config) {
   app.get('/', (_req, res) => {
     res.json({
       name: 'Helmora AI',
-      version: '0.1.16',
+      version: HUB_VERSION,
       storage: 'Settings UI: Local (default) | SQL (Supabase)',
       docs: {
         human: 'GET /docs (public)',
@@ -161,15 +265,7 @@ export function createApp(_config: Config) {
     });
   });
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error(err);
-    res.status(500).json({
-      error: {
-        message: err instanceof Error ? err.message : 'Internal error',
-        type: 'internal_error',
-      },
-    });
-  });
+  app.use(publicErrorHandler);
 
   return app;
 }

@@ -23,6 +23,7 @@ export interface AdminAuthConfig {
 }
 
 export interface RuntimeConfigFile {
+  authStoreMigrationVersion: number;
   storageChoice: StorageChoice;
   supabaseUrl: string | null;
   supabaseServiceRoleKey: string | null;
@@ -48,6 +49,7 @@ export const DEFAULT_ADMIN_CONFIG: AdminAuthConfig = {
 };
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigFile = {
+  authStoreMigrationVersion: 0,
   storageChoice: 'local',
   supabaseUrl: null,
   supabaseServiceRoleKey: null,
@@ -105,11 +107,14 @@ export function readRuntimeConfig(dataDir: string): RuntimeConfigFile {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
     const rawChoice = String(raw.storageChoice ?? 'local');
+    const authStoreMigrationVersion =
+      raw.authStoreMigrationVersion === 1 ? 1 : 0;
     let choice: StorageChoice = 'local';
     if (rawChoice === 'sql' || rawChoice === 'supabase') choice = 'sql';
     if (rawChoice === 'local' || rawChoice === 'sqlite') choice = 'local';
 
     return {
+      authStoreMigrationVersion,
       storageChoice: choice,
       supabaseUrl: typeof raw.supabaseUrl === 'string' ? raw.supabaseUrl.trim() || null : null,
       supabaseServiceRoleKey:
@@ -121,7 +126,10 @@ export function readRuntimeConfig(dataDir: string): RuntimeConfigFile {
       rateBackend: raw.rateBackend === 'redis' ? 'redis' : 'memory',
       redisUrl: typeof raw.redisUrl === 'string' ? raw.redisUrl.trim() || null : null,
       tunnel: parseTunnel(raw.tunnel),
-      admin: parseAdmin(raw.admin),
+      admin:
+        authStoreMigrationVersion >= 1
+          ? { ...DEFAULT_ADMIN_CONFIG }
+          : parseAdmin(raw.admin),
     };
   } catch {
     return {
@@ -135,7 +143,48 @@ export function readRuntimeConfig(dataDir: string): RuntimeConfigFile {
 export function writeRuntimeConfig(dataDir: string, next: RuntimeConfigFile): void {
   fs.mkdirSync(dataDir, { recursive: true });
   const file = runtimeConfigPath(dataDir);
-  fs.writeFileSync(file, JSON.stringify(next, null, 2), 'utf8');
+  const serialized: Record<string, unknown> = { ...next };
+  if (next.authStoreMigrationVersion >= 1) delete serialized.admin;
+  atomicWriteJson(file, serialized);
+}
+
+function atomicWriteJson(file: string, value: unknown): void {
+  const temp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  const handle = fs.openSync(temp, 'w', 0o600);
+  try {
+    fs.writeFileSync(handle, JSON.stringify(value, null, 2), 'utf8');
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+  try {
+    fs.renameSync(temp, file);
+  } catch (error) {
+    try {
+      fs.rmSync(temp, { force: true });
+    } catch {
+      // Best-effort cleanup; the original error remains authoritative.
+    }
+    throw error;
+  }
+}
+
+export function rewriteRuntimeConfigWithoutLegacyAuth(dataDir: string): void {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const file = runtimeConfigPath(dataDir);
+  let raw: Record<string, unknown> = {};
+  if (fs.existsSync(file)) {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('runtime-config.json must contain an object.');
+    }
+    raw = { ...(parsed as Record<string, unknown>) };
+  }
+  delete raw.admin;
+  delete raw.sessionSecret;
+  delete raw.adminSessions;
+  raw.authStoreMigrationVersion = 1;
+  atomicWriteJson(file, raw);
 }
 
 export function updateTunnelConfig(

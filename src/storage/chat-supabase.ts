@@ -6,6 +6,7 @@ import {
   CHAT_MAX_CONTENT_CHARS,
   CHAT_MAX_MESSAGES_PER_SESSION,
   CHAT_MAX_SESSIONS,
+  ChatSessionNotFoundError,
   type AppendChatMessageInput,
   type CreateChatSessionInput,
   type ImportChatStoreInput,
@@ -93,6 +94,41 @@ function mapMessage(row: MessageRow): StoredChatMessage {
   };
 }
 
+function messageRpcPayload(messages: AppendChatMessageInput[]) {
+  const now = new Date().toISOString();
+  return messages.map((message) => ({
+    id: message.id?.trim() || randomUUID(),
+    role: message.role,
+    content: clampContent(message.content ?? ''),
+    status: message.status ?? null,
+    errorCode: message.errorCode ?? null,
+    createdAt: message.createdAt || now,
+  }));
+}
+
+async function atomicMessageMutation(
+  client: SupabaseClient,
+  rpcName: 'append_chat_message_atomic' | 'replace_chat_messages_atomic',
+  operation: string,
+  sessionId: string,
+  messages: AppendChatMessageInput[]
+): Promise<StoredChatMessage[]> {
+  const { data, error } = await client.rpc(rpcName, {
+    p_session_id: sessionId,
+    p_messages: messageRpcPayload(messages),
+  });
+  if (error) {
+    if (error.message.toLowerCase().includes('chat_session_not_found')) {
+      throw new ChatSessionNotFoundError(sessionId);
+    }
+    throw formatSupabaseControlError(operation, error.message);
+  }
+  if (!Array.isArray(data)) {
+    throw formatSupabaseControlError(operation, 'invalid RPC response');
+  }
+  return (data as MessageRow[]).map(mapMessage);
+}
+
 function mapSession(row: SessionRow, messageCount: number): StoredChatSession {
   return {
     id: row.id,
@@ -130,18 +166,6 @@ async function getSessionRow(
   return (data as SessionRow | null) ?? null;
 }
 
-async function maxSeq(client: SupabaseClient, sessionId: string): Promise<number> {
-  const { data, error } = await client
-    .from(CHAT_TABLE.messages)
-    .select('seq')
-    .eq('session_id', sessionId)
-    .order('seq', { ascending: false })
-    .limit(1);
-  if (error) throw formatSupabaseControlError('max chat message seq', error.message);
-  const row = data?.[0] as { seq: number } | undefined;
-  return Number(row?.seq) || 0;
-}
-
 async function pruneOldestSessions(
   client: SupabaseClient,
   keepActiveId: string | null
@@ -169,26 +193,6 @@ async function pruneOldestSessions(
     .in('id', toDelete);
   if (delErr) throw formatSupabaseControlError('prune chat sessions', delErr.message);
   return toDelete.length;
-}
-
-async function trimMessagesToCap(
-  client: SupabaseClient,
-  sessionId: string
-): Promise<void> {
-  const count = await countMessages(client, sessionId);
-  if (count <= CHAT_MAX_MESSAGES_PER_SESSION) return;
-  const drop = count - CHAT_MAX_MESSAGES_PER_SESSION;
-  const { data, error } = await client
-    .from(CHAT_TABLE.messages)
-    .select('id')
-    .eq('session_id', sessionId)
-    .order('seq', { ascending: true })
-    .limit(drop);
-  if (error) throw formatSupabaseControlError('trim chat messages', error.message);
-  const ids = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
-  if (ids.length === 0) return;
-  const { error: delErr } = await client.from(CHAT_TABLE.messages).delete().in('id', ids);
-  if (delErr) throw formatSupabaseControlError('delete trimmed chat messages', delErr.message);
 }
 
 export async function supabaseListChatSessions(
@@ -359,51 +363,13 @@ export async function supabaseAppendChatMessages(
   sessionId: string,
   messages: AppendChatMessageInput[]
 ): Promise<StoredChatMessage[]> {
-  if (!(await getSessionRow(client, sessionId))) {
-    throw new Error(`Chat session not found: ${sessionId}`);
-  }
-  if (messages.length === 0) return [];
-
-  const start = await maxSeq(client, sessionId);
-  const now = new Date().toISOString();
-  const out: StoredChatMessage[] = [];
-  const rows = messages.map((msg, i) => {
-    const seq = start + i + 1;
-    const id = msg.id?.trim() || randomUUID();
-    const createdAt = msg.createdAt || now;
-    const content = clampContent(msg.content ?? '');
-    out.push({
-      id,
-      role: msg.role,
-      content,
-      status: msg.status,
-      errorCode: msg.errorCode,
-      createdAt,
-      seq,
-    });
-    return {
-      id,
-      session_id: sessionId,
-      role: msg.role,
-      content,
-      status: msg.status ?? null,
-      error_code: msg.errorCode ?? null,
-      created_at: createdAt,
-      seq,
-    };
-  });
-
-  const { error } = await client.from(CHAT_TABLE.messages).insert(rows);
-  if (error) throw formatSupabaseControlError('append chat messages', error.message);
-
-  await trimMessagesToCap(client, sessionId);
-  const { error: touchErr } = await client
-    .from(CHAT_TABLE.sessions)
-    .update({ updated_at: now })
-    .eq('id', sessionId);
-  if (touchErr) throw formatSupabaseControlError('touch chat session', touchErr.message);
-
-  return out;
+  return atomicMessageMutation(
+    client,
+    'append_chat_message_atomic',
+    'append chat messages',
+    sessionId,
+    messages
+  );
 }
 
 export async function supabaseReplaceChatMessages(
@@ -411,64 +377,14 @@ export async function supabaseReplaceChatMessages(
   sessionId: string,
   messages: AppendChatMessageInput[]
 ): Promise<StoredChatMessage[]> {
-  if (!(await getSessionRow(client, sessionId))) {
-    throw new Error(`Chat session not found: ${sessionId}`);
-  }
-  const now = new Date().toISOString();
   const capped = messages.slice(-CHAT_MAX_MESSAGES_PER_SESSION);
-
-  const { error: delErr } = await client
-    .from(CHAT_TABLE.messages)
-    .delete()
-    .eq('session_id', sessionId);
-  if (delErr) throw formatSupabaseControlError('clear chat messages', delErr.message);
-
-  if (capped.length === 0) {
-    const { error: touchErr } = await client
-      .from(CHAT_TABLE.sessions)
-      .update({ updated_at: now })
-      .eq('id', sessionId);
-    if (touchErr) throw formatSupabaseControlError('touch chat session', touchErr.message);
-    return [];
-  }
-
-  const out: StoredChatMessage[] = [];
-  const rows = capped.map((msg, i) => {
-    const seq = i + 1;
-    const id = msg.id?.trim() || randomUUID();
-    const createdAt = msg.createdAt || now;
-    const content = clampContent(msg.content ?? '');
-    out.push({
-      id,
-      role: msg.role,
-      content,
-      status: msg.status,
-      errorCode: msg.errorCode,
-      createdAt,
-      seq,
-    });
-    return {
-      id,
-      session_id: sessionId,
-      role: msg.role,
-      content,
-      status: msg.status ?? null,
-      error_code: msg.errorCode ?? null,
-      created_at: createdAt,
-      seq,
-    };
-  });
-
-  const { error } = await client.from(CHAT_TABLE.messages).insert(rows);
-  if (error) throw formatSupabaseControlError('replace chat messages', error.message);
-
-  const { error: touchErr } = await client
-    .from(CHAT_TABLE.sessions)
-    .update({ updated_at: now })
-    .eq('id', sessionId);
-  if (touchErr) throw formatSupabaseControlError('touch chat session', touchErr.message);
-
-  return out;
+  return atomicMessageMutation(
+    client,
+    'replace_chat_messages_atomic',
+    'replace chat messages',
+    sessionId,
+    capped
+  );
 }
 
 export { CHAT_ACTIVE_SETTING_KEY };
@@ -484,24 +400,23 @@ export async function supabaseImportChatStore(
 
   for (const thread of threads) {
     const id = thread.id?.trim() || randomUUID();
-    await client.from(CHAT_TABLE.sessions).delete().eq('id', id);
-
     const modelSelection = thread.modelSelection ?? defaultModelSelection();
-    const { error } = await client.from(CHAT_TABLE.sessions).insert({
-      id,
-      title: (thread.title || 'New chat').slice(0, 120),
-      model_selection: modelSelection,
-      thinking: Boolean(thread.thinking),
-      created_at: thread.createdAt || new Date().toISOString(),
-      updated_at: thread.updatedAt || new Date().toISOString(),
-    });
+    const { error } = await client.from(CHAT_TABLE.sessions).upsert(
+      {
+        id,
+        title: (thread.title || 'New chat').slice(0, 120),
+        model_selection: modelSelection,
+        thinking: Boolean(thread.thinking),
+        created_at: thread.createdAt || new Date().toISOString(),
+        updated_at: thread.updatedAt || new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
     if (error) throw formatSupabaseControlError('import chat session', error.message);
 
     const msgs = (thread.messages ?? []).slice(-CHAT_MAX_MESSAGES_PER_SESSION);
-    if (msgs.length > 0) {
-      const inserted = await supabaseReplaceChatMessages(client, id, msgs);
-      importedMessages += inserted.length;
-    }
+    const inserted = await supabaseReplaceChatMessages(client, id, msgs);
+    importedMessages += inserted.length;
   }
 
   const pruned = await pruneOldestSessions(client, input.activeThreadId);

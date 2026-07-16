@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
 import { createApp } from '../app.js';
@@ -22,6 +22,7 @@ beforeAll(async () => {
   delete process.env.HELMORA_API_KEY;
   delete process.env.HELMORA_ADMIN_TOKEN;
   delete process.env.HELMORA_ADMIN_PASSWORD;
+  process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
 
   const config = loadConfig();
   config.dataDir = tmpDir;
@@ -35,7 +36,7 @@ beforeAll(async () => {
 
   const setup = await request(app)
     .post('/api/auth/setup')
-    .send({ password: 'docs-emb-password' });
+    .send({ password: 'docs-emb-password', setupToken: TEST_SETUP_TOKEN });
   adminToken = setup.body.adminToken;
 
   const created = await request(app)

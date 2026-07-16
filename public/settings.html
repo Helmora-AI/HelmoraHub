@@ -280,6 +280,16 @@
       border-color: var(--accent-dim);
       background: rgba(61, 154, 122, 0.12);
     }
+    .topnav--spaced { margin-bottom: 1rem; }
+    .section-offset { margin-top: 1.25rem; }
+    .keys-list { margin-top: 1rem; }
+    .field--offset { margin-top: 1rem; }
+    .key-row {
+      margin: 0.4rem 0;
+      padding: 0.5rem 0;
+      border-top: 1px solid var(--line);
+    }
+    .key-disabled { color: var(--danger); }
   </style>
 </head>
 <body>
@@ -287,7 +297,7 @@
     <h1>Helmora AI Settings <span class="pill off" id="activePill">…</span></h1>
     <p class="sub" id="pageSub">Loading…</p>
 
-    <nav class="topnav" aria-label="Admin pages" style="margin-bottom:1rem">
+    <nav class="topnav topnav--spaced" aria-label="Admin pages">
       <a class="active" href="/settings">Settings</a>
       <a href="/providers">Providers</a>
       <a href="/models">Models</a>
@@ -296,6 +306,10 @@
     <form id="setupForm" class="card" hidden>
       <h2>Create admin password</h2>
       <p class="hint">First-time setup. This locks <code>/settings</code> and <code>/api/*</code>. <code>/v1</code> still uses the separate API key.</p>
+      <label class="field">
+        <span>Operator setup token</span>
+        <input type="password" name="setupToken" minlength="32" maxlength="512" required autocomplete="off" />
+      </label>
       <label class="field">
         <span>Admin password <small>(min 8 chars)</small></span>
         <input type="password" name="password" minlength="8" required autocomplete="new-password" />
@@ -308,7 +322,13 @@
         <button type="submit" id="setupBtn">Create &amp; continue</button>
       </div>
       <div class="status" id="setupStatus" role="status"></div>
-      <div class="token-box" id="setupTokenBox" hidden></div>
+      <div id="setupHandoff" hidden>
+        <div class="token-box" id="setupAdminTokenBox"></div>
+        <div class="token-box" id="setupRecoveryTokenBox"></div>
+        <div class="row">
+          <button type="button" id="setupAcknowledgeBtn">I saved these credentials</button>
+        </div>
+      </div>
     </form>
 
     <form id="loginForm" class="card" hidden>
@@ -362,7 +382,7 @@
           </label>
         </div>
 
-        <div id="sqlFields" class="sql-only" hidden style="margin-top: 1.25rem">
+        <div id="sqlFields" class="sql-only section-offset" hidden>
           <p class="hint">
             Apply <code>sql/supabase-schema.sql</code> in the Supabase SQL editor first.
           </p>
@@ -435,7 +455,7 @@
         </form>
         <div class="status" id="keysStatus" role="status"></div>
         <div class="token-box" id="keyPlainBox" hidden></div>
-        <div id="keysList" class="hint" style="margin-top:1rem"></div>
+        <div id="keysList" class="hint keys-list"></div>
       </div>
       </div>
 
@@ -448,7 +468,7 @@
           Token file also works: <code>data/cloudflare-tunnel.token</code>.
         </p>
 
-        <label class="field" style="margin-top: 1rem">
+        <label class="field field--offset">
           <span>Tunnel token <small id="tokenHint">(leave blank to keep)</small></span>
           <input type="password" name="token" placeholder="eyJ…" autocomplete="off" />
         </label>
@@ -488,7 +508,9 @@
     const saveBtn = document.getElementById('saveBtn');
     const tunnelSaveBtn = document.getElementById('tunnelSaveBtn');
     const tunnelUrl = document.getElementById('tunnelUrl');
-    const setupTokenBox = document.getElementById('setupTokenBox');
+    const setupHandoff = document.getElementById('setupHandoff');
+    const setupAdminTokenBox = document.getElementById('setupAdminTokenBox');
+    const setupRecoveryTokenBox = document.getElementById('setupRecoveryTokenBox');
     const adminTokenBox = document.getElementById('adminTokenBox');
     const adminStatus = document.getElementById('adminStatus');
 
@@ -516,8 +538,16 @@
         activePill.textContent = 'locked';
         activePill.className = 'pill warn';
       } else {
-        pageSub.innerHTML =
-          'Storage, API keys, and tunnel. Manage providers at <a href="/providers">/providers</a> · models at <a href="/models">/models</a>.';
+        pageSub.replaceChildren();
+        pageSub.append('Storage, API keys, and tunnel. Manage providers at ');
+        const providersLink = document.createElement('a');
+        providersLink.href = '/providers';
+        providersLink.textContent = '/providers';
+        pageSub.append(providersLink, ' · models at ');
+        const modelsLink = document.createElement('a');
+        modelsLink.href = '/models';
+        modelsLink.textContent = '/models';
+        pageSub.append(modelsLink, '.');
         const hash = (location.hash || '#general').replace('#', '');
         if (hash === 'providers') {
           location.replace('/providers');
@@ -577,8 +607,26 @@
       tunnelPill.textContent = t.running ? 'running' : t.enabled ? 'enabled' : 'off';
       tunnelPill.className = 'pill ' + (t.running ? '' : t.enabled ? 'warn' : 'off');
       if (t.publicUrl) {
-        tunnelUrl.hidden = false;
-        tunnelUrl.innerHTML = 'Public URL: <a href="' + t.publicUrl + '" target="_blank" rel="noopener">' + t.publicUrl + '</a>';
+        let url = null;
+        try {
+          url = new URL(String(t.publicUrl));
+          if (url.protocol !== 'https:' && url.protocol !== 'http:') url = null;
+        } catch {
+          url = null;
+        }
+        tunnelUrl.replaceChildren();
+        if (url) {
+          tunnelUrl.hidden = false;
+          tunnelUrl.append('Public URL: ');
+          const link = document.createElement('a');
+          link.href = url.href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = url.href;
+          tunnelUrl.append(link);
+        } else {
+          tunnelUrl.hidden = true;
+        }
       } else {
         tunnelUrl.hidden = true;
         tunnelUrl.textContent = '';
@@ -645,6 +693,12 @@
 
       if (auth.setupRequired) {
         showGate('setup');
+        if (auth.setupAvailable === false) {
+          const setupStatus = document.getElementById('setupStatus');
+          setupStatus.textContent = 'Setup is unavailable. Configure a valid HELMORA_SETUP_TOKEN and restart the Hub.';
+          setupStatus.className = 'status err';
+          document.getElementById('setupBtn').disabled = true;
+        }
         return;
       }
       if (!auth.authenticated) {
@@ -664,41 +718,41 @@
       if (!res.ok) throw new Error(data.error?.message || data.error || 'Failed to load keys');
       document.getElementById('keysPill').textContent = data.keys.length + ' keys';
       document.getElementById('keysPill').className = 'pill';
-      keysList.innerHTML = (data.keys || [])
-        .map((k) => {
-          const budget =
-            k.budgetUsd == null
-              ? '∞'
-              : '$' + Number(k.spentUsd).toFixed(4) + ' / $' + Number(k.budgetUsd).toFixed(2);
-          const exp = k.expiresAt
-            ? new Date(k.expiresAt).toLocaleDateString()
-            : 'never';
-          return (
-            '<div style="margin:0.4rem 0;padding:0.5rem 0;border-top:1px solid var(--line)">' +
-            '<strong>' +
-            k.name +
-            '</strong> · ' +
-            k.keyEnv +
-            ' · <code>' +
-            k.keyPreview +
-            '</code><br/>spent ' +
-            budget +
-            ' · expires ' +
-            exp +
-            (k.enabled ? '' : ' · <span style="color:var(--danger)">disabled</span>') +
-            ' · <a href="#" data-revoke="' +
-            k.id +
-            '">revoke</a></div>'
-          );
-        })
-        .join('') || '<p>No keys yet.</p>';
-
-      keysList.querySelectorAll('[data-revoke]').forEach((a) => {
-        a.addEventListener('click', async (ev) => {
+      keysList.replaceChildren();
+      if (!Array.isArray(data.keys) || data.keys.length === 0) {
+        const empty = document.createElement('p');
+        empty.textContent = 'No keys yet.';
+        keysList.append(empty);
+      }
+      for (const k of data.keys || []) {
+        const budget = k.budgetUsd == null
+          ? '∞'
+          : '$' + Number(k.spentUsd).toFixed(4) + ' / $' + Number(k.budgetUsd).toFixed(2);
+        const exp = k.expiresAt
+          ? new Date(k.expiresAt).toLocaleDateString()
+          : 'never';
+        const row = document.createElement('div');
+        row.className = 'key-row';
+        const name = document.createElement('strong');
+        name.textContent = String(k.name || 'Unnamed key');
+        const preview = document.createElement('code');
+        preview.textContent = String(k.keyPreview || '');
+        row.append(name, ' · ' + String(k.keyEnv || '') + ' · ', preview, document.createElement('br'));
+        row.append('spent ' + budget + ' · expires ' + exp);
+        if (!k.enabled) {
+          const disabled = document.createElement('span');
+          disabled.className = 'key-disabled';
+          disabled.textContent = ' · disabled';
+          row.append(disabled);
+        }
+        const revoke = document.createElement('a');
+        revoke.href = '#';
+        revoke.textContent = 'revoke';
+        row.append(' · ', revoke);
+        revoke.addEventListener('click', async (ev) => {
           ev.preventDefault();
-          const id = a.getAttribute('data-revoke');
           if (!confirm('Revoke this API key?')) return;
-          const r = await fetch('/api/keys/' + id, {
+          const r = await fetch('/api/keys/' + encodeURIComponent(String(k.id)), {
             method: 'DELETE',
             credentials: 'include',
           });
@@ -709,7 +763,8 @@
           }
           await loadKeys();
         });
-      });
+        keysList.append(row);
+      }
     }
 
     setupForm.addEventListener('submit', async (e) => {
@@ -730,23 +785,42 @@
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: p1 }),
+          body: JSON.stringify({
+            password: p1,
+            setupToken: setupForm.setupToken.value,
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || data.error || 'Setup failed');
         setupStatus.textContent = data.message;
         setupStatus.className = 'status ok';
-        if (data.adminToken) {
-          setupTokenBox.hidden = false;
-          setupTokenBox.textContent = 'Admin token (copy now): ' + data.adminToken;
-        }
-        setTimeout(() => boot().catch(console.error), 800);
+        setupHandoff.hidden = false;
+        setupAdminTokenBox.textContent = data.adminToken
+          ? 'Admin token (copy now): ' + data.adminToken
+          : data.adminTokenEnvManaged
+            ? 'Admin token is environment-managed; no local token was generated.'
+            : 'Invalid admin credential handoff.';
+        setupRecoveryTokenBox.textContent = data.recoveryToken
+          ? 'Recovery token (copy now): ' + data.recoveryToken
+          : data.recoveryTokenEnvManaged
+            ? 'Recovery token is environment-managed; no local token was generated.'
+            : 'Invalid recovery credential handoff.';
+        setupForm.password.value = '';
+        setupForm.password2.value = '';
+        setupForm.setupToken.value = '';
       } catch (err) {
         setupStatus.textContent = err.message || String(err);
         setupStatus.className = 'status err';
       } finally {
         document.getElementById('setupBtn').disabled = false;
       }
+    });
+
+    document.getElementById('setupAcknowledgeBtn').addEventListener('click', async () => {
+      setupAdminTokenBox.textContent = '';
+      setupRecoveryTokenBox.textContent = '';
+      setupHandoff.hidden = true;
+      await boot();
     });
 
     loginForm.addEventListener('submit', async (e) => {

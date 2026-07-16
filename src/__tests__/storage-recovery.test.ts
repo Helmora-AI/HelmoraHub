@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../app.js';
 import { loadConfig, type Config } from '../lib/config.js';
-import { hashRecoveryToken } from '../lib/admin-auth.js';
+import { hashPassword, hashRecoveryToken } from '../lib/admin-auth.js';
+import { getAdminAuthStore } from '../lib/admin-auth-store.js';
 import {
   readRecoverySupabaseCredential,
 } from '../lib/recovery-control-vault.js';
-import { updateAdminConfig } from '../lib/runtime-config.js';
 import {
   SUPABASE_CONTROL_CAPABILITIES,
   probeSupabaseControlCapabilities,
@@ -66,7 +66,8 @@ describe('Hybrid recovery storage surface', () => {
       }),
     });
     recoveryToken = 'helmora-recovery-token-storage-repair-value';
-    updateAdminConfig(tmpDir, {
+    getAdminAuthStore(tmpDir).upsertIdentity({
+      passwordHash: hashPassword('storage-recovery-admin-password'),
       recoveryTokenHash: hashRecoveryToken(recoveryToken),
     });
     const app = createApp(config);

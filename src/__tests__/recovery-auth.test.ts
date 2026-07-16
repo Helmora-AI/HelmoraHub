@@ -19,13 +19,17 @@ import {
   issueRecoverySession,
   verifyRecoverySession,
 } from '../lib/recovery-sessions.js';
-import { updateAdminConfig } from '../lib/runtime-config.js';
 import { closeStorage, initStorage } from '../storage/index.js';
 import {
   isRecoveryRouteAllowed,
   requireRecovery,
 } from '../middleware/requireRecovery.js';
-import request from './test-request.js';
+import request, { TEST_SETUP_TOKEN } from './test-request.js';
+import {
+  closeAdminAuthStore,
+  getAdminAuthStore,
+  initializeAdminAuthStore,
+} from '../lib/admin-auth-store.js';
 
 describe('recovery authentication primitives', () => {
   let tmpDir: string;
@@ -40,10 +44,12 @@ describe('recovery authentication primitives', () => {
       'HELMORA_ADMIN_TOKEN',
       'CTRLHUB_ADMIN_PASSWORD',
       'CTRLHUB_ADMIN_TOKEN',
+      'HELMORA_SETUP_TOKEN',
     ]) {
       previousEnv[name] = process.env[name];
       delete process.env[name];
     }
+    process.env.HELMORA_SETUP_TOKEN = TEST_SETUP_TOKEN;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-recovery-auth-'));
     config = loadConfig();
     config.dataDir = tmpDir;
@@ -55,6 +61,20 @@ describe('recovery authentication primitives', () => {
     setActiveConfig(config);
     await initStorage(config);
   });
+
+  function restartAuthSnapshot(): void {
+    closeAdminAuthStore();
+    const next = loadConfig();
+    next.dataDir = tmpDir;
+    next.dbPath = path.join(tmpDir, 'helmora.db');
+    next.storageChoice = 'local';
+    next.storageBackend = 'sqlite';
+    next.rateBackend = 'memory';
+    next.encryptionKey = 'test-recovery-auth-encryption-key';
+    config = next;
+    setActiveConfig(config);
+    initializeAdminAuthStore(tmpDir);
+  }
 
   afterEach(async () => {
     await closeStorage();
@@ -68,19 +88,24 @@ describe('recovery authentication primitives', () => {
 
   it('uses the environment recovery token instead of a matching local hash', () => {
     const localToken = 'helmora-recovery-token-local-value';
-    updateAdminConfig(tmpDir, {
+    getAdminAuthStore(tmpDir).upsertIdentity({
+      passwordHash: hashPassword('local-password'),
       recoveryTokenHash: hashRecoveryToken(localToken),
     });
     expect(recoveryCredentialAvailable()).toBe(true);
     expect(verifyRecoveryCredential(localToken)).toBe(true);
 
     process.env.HELMORA_RECOVERY_TOKEN = 'environment-recovery-token-value';
+    restartAuthSnapshot();
     expect(verifyRecoveryCredential(localToken)).toBe(false);
     expect(verifyRecoveryCredential('environment-recovery-token-value')).toBe(true);
 
     const sharedToken = 'shared-admin-and-recovery-token';
-    updateAdminConfig(tmpDir, { adminTokenHash: hashAdminToken(sharedToken) });
+    getAdminAuthStore(tmpDir).upsertIdentity({
+      adminTokenHash: hashAdminToken(sharedToken),
+    });
     process.env.HELMORA_RECOVERY_TOKEN = sharedToken;
+    restartAuthSnapshot();
     expect(verifyAdminTokenPlain(sharedToken)).toBe(false);
   });
 
@@ -113,7 +138,10 @@ describe('recovery authentication primitives', () => {
     const app = createApp(config);
     const setup = await request(app)
       .post('/api/auth/setup')
-      .send({ password: 'recovery-admin-password' });
+      .send({
+        password: 'recovery-admin-password',
+        setupToken: TEST_SETUP_TOKEN,
+      });
     expect(setup.status).toBe(200);
     expect(setup.body.recoveryToken).toMatch(/^helmora-recovery-token-/);
     expect(verifyRecoveryCredential(setup.body.recoveryToken)).toBe(true);
@@ -134,6 +162,7 @@ describe('recovery authentication primitives', () => {
     expect(verifyRecoveryCredential(rotated.body.recoveryToken)).toBe(true);
 
     process.env.HELMORA_RECOVERY_TOKEN = 'environment-recovery-token-value';
+    restartAuthSnapshot();
     const envManaged = await request(app)
       .post('/api/auth/rotate-recovery-token')
       .set('Authorization', `Bearer ${setup.body.adminToken}`);
@@ -143,7 +172,7 @@ describe('recovery authentication primitives', () => {
 
   it('logs in with recovery scope and rejects that bearer on admin and model routes', async () => {
     const recoveryToken = 'helmora-recovery-token-login-value';
-    updateAdminConfig(tmpDir, {
+    getAdminAuthStore(tmpDir).upsertIdentity({
       recoveryTokenHash: hashRecoveryToken(recoveryToken),
       passwordHash: hashPassword('recovery-login-admin-password'),
     });
@@ -171,7 +200,7 @@ describe('recovery authentication primitives', () => {
 
     const status = await request(app).get('/api/auth/status');
     expect(status.status).toBe(200);
-    expect(status.body.recoveryAvailable).toBe(true);
+    expect(status.body.recoveryAvailable).toBeUndefined();
     expect(status.body.recoveryMode).toBe(false);
   });
 
@@ -210,7 +239,8 @@ describe('recovery authentication primitives', () => {
 
   it('rate-limits repeated recovery login attempts', async () => {
     const recoveryToken = 'helmora-recovery-token-rate-limit-value';
-    updateAdminConfig(tmpDir, {
+    getAdminAuthStore(tmpDir).upsertIdentity({
+      passwordHash: hashPassword('recovery-rate-limit-password'),
       recoveryTokenHash: hashRecoveryToken(recoveryToken),
     });
     const app = createApp(config);

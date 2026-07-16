@@ -6,6 +6,15 @@ export const CHAT_MAX_MESSAGES_PER_SESSION = 200;
 export const CHAT_MAX_CONTENT_CHARS = 200_000;
 export const CHAT_ACTIVE_SETTING_KEY = 'playground_active_session_id';
 
+export class ChatSessionNotFoundError extends Error {
+  readonly code = 'chat_session_not_found';
+
+  constructor(readonly sessionId: string) {
+    super(`Chat session not found: ${sessionId}`);
+    this.name = 'ChatSessionNotFoundError';
+  }
+}
+
 export type StoredChatModelSelection =
   | { kind: 'auto' }
   | { kind: 'mode'; mode: string }

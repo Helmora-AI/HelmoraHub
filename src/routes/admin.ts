@@ -12,6 +12,7 @@ import {
 } from '../db/index.js';
 import { getControlHealth, getStorage } from '../storage/index.js';
 import { getActiveConfig } from '../lib/config.js';
+import { HUB_VERSION } from '../lib/version.js';
 import { HUB_MODES, MODE_PROFILES } from '../types.js';
 import type { HubMode } from '../types.js';
 import { buildFallbackChain } from '../services/mode-router.js';
@@ -167,7 +168,7 @@ adminRouter.get('/status', async (_req, res, next) => {
     res.json({
       ok: true,
       service: 'Helmora AI',
-      version: '0.1.16',
+      version: HUB_VERSION,
       settingsUrl: '/settings',
       providersUrl: '/providers',
       modelsUrl: '/models',

@@ -2,6 +2,7 @@ import type { Router } from 'express';
 import { z } from 'zod';
 import { getConfigStore } from '../storage/index.js';
 import {
+  ChatSessionNotFoundError,
   CHAT_MAX_MESSAGES_PER_SESSION,
   CHAT_MAX_SESSIONS,
 } from '../storage/chat-types.js';
@@ -185,6 +186,9 @@ export function mountChatHistoryRoutes(router: Router): void {
       );
       res.status(201).json({ messages });
     } catch (err) {
+      if (err instanceof ChatSessionNotFoundError) {
+        return notFound(res, 'Session not found');
+      }
       next(err);
     }
   });
@@ -203,6 +207,9 @@ export function mountChatHistoryRoutes(router: Router): void {
       );
       res.json({ messages });
     } catch (err) {
+      if (err instanceof ChatSessionNotFoundError) {
+        return notFound(res, 'Session not found');
+      }
       next(err);
     }
   });

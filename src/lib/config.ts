@@ -3,6 +3,7 @@ import path from 'node:path';
 import { config as loadDotenv } from 'dotenv';
 import {
   helEnv,
+  helEnvTruthy,
   HEL_DB_FILE,
   LEGACY_DB_FILE,
 } from './hel-env.js';
@@ -13,11 +14,18 @@ import {
   type StorageChoice,
 } from './runtime-config.js';
 import { readRecoverySupabaseCredential } from './recovery-control-vault.js';
+import {
+  normalizeConfiguredOrigin,
+  parseConfiguredOrigins,
+} from './origin-policy.js';
 
-loadDotenv();
+if (process.env.NODE_ENV !== 'test') {
+  loadDotenv({ quiet: true });
+}
 
 export type StorageBackend = 'sqlite' | 'supabase';
 export type RateBackend = 'memory' | 'redis';
+export type SetupTokenState = 'valid' | 'missing' | 'invalid';
 
 export interface Config {
   port: number;
@@ -41,6 +49,15 @@ export interface Config {
   publicUrl: string | null;
   /** SPA origin for post-callback redirects (HELMORA_FRONTEND_URL). */
   frontendUrl: string | null;
+  /** Authentication environment values are snapshotted once at startup. */
+  adminPasswordEnv: string | null;
+  adminTokenEnv: string | null;
+  recoveryTokenEnv: string | null;
+  setupToken: string | null;
+  setupTokenState: SetupTokenState;
+  sessionTtlSec: number;
+  cookieSecure: boolean;
+  corsOrigins: string[];
 }
 
 let activeConfig: Config | null = null;
@@ -88,6 +105,27 @@ function resolveRateBackend(
   return 'memory';
 }
 
+function resolveSessionTtlSec(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = helEnv('SESSION_TTL_SEC', env);
+  if (!raw) return 86_400;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 300 || parsed > 2_592_000) {
+    return 86_400;
+  }
+  return parsed;
+}
+
+function resolveSetupToken(
+  env: NodeJS.ProcessEnv = process.env
+): { token: string | null; state: SetupTokenState } {
+  const token = helEnv('SETUP_TOKEN', env) || null;
+  if (!token) return { token: null, state: 'missing' };
+  if (token.length < 32 || token.length > 512) {
+    return { token: null, state: 'invalid' };
+  }
+  return { token, state: 'valid' };
+}
+
 /**
  * Load config with Settings preference (runtime-config.json).
  * Default storage is **local**. Env STORAGE_BACKEND is legacy fallback only
@@ -121,8 +159,21 @@ export function loadConfig(): Config {
     recoverySupabaseServiceRoleKey ||
     null;
   const redisUrl = runtime.redisUrl || process.env.REDIS_URL?.trim() || null;
-  const publicUrl = helEnv('PUBLIC_URL') || null;
-  const frontendUrl = helEnv('FRONTEND_URL') || null;
+  const rawPublicUrl = helEnv('PUBLIC_URL') || null;
+  const rawFrontendUrl = helEnv('FRONTEND_URL') || null;
+  const publicUrl = rawPublicUrl
+    ? normalizeConfiguredOrigin(rawPublicUrl)
+    : null;
+  const frontendUrl = rawFrontendUrl
+    ? normalizeConfiguredOrigin(rawFrontendUrl)
+    : null;
+  const corsOrigins = parseConfiguredOrigins({
+    publicUrl,
+    frontendUrl,
+    additionalOrigins: helEnv('CORS_ORIGINS') || null,
+  });
+  const setupToken = resolveSetupToken();
+  const explicitCookieSecure = helEnvTruthy('COOKIE_SECURE');
 
   const config: Config = {
     port: resolveListenPort(),
@@ -142,6 +193,15 @@ export function loadConfig(): Config {
     redisUrl,
     publicUrl,
     frontendUrl,
+    adminPasswordEnv: helEnv('ADMIN_PASSWORD') || null,
+    adminTokenEnv: helEnv('ADMIN_TOKEN') || null,
+    recoveryTokenEnv: helEnv('RECOVERY_TOKEN') || null,
+    setupToken: setupToken.token,
+    setupTokenState: setupToken.state,
+    sessionTtlSec: resolveSessionTtlSec(),
+    cookieSecure:
+      explicitCookieSecure ?? Boolean(publicUrl?.toLowerCase().startsWith('https://')),
+    corsOrigins,
   };
 
   activeConfig = config;

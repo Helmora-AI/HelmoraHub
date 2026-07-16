@@ -3,19 +3,34 @@ import { listAgents, listProviders, getActiveMode } from '../db/index.js';
 import { MODE_PROFILES } from '../types.js';
 import { requireControlSnapshot } from '../middleware/requireControlSnapshot.js';
 import { getControlHealth } from '../storage/index.js';
+import { getActiveConfig } from '../lib/config.js';
+import { isSetupRequired } from '../lib/admin-auth.js';
+import { getAdminAuthStoreHealth } from '../lib/admin-auth-store.js';
+import { HUB_VERSION } from '../lib/version.js';
 
 export const runtimeRouter = Router();
 
 function healthPayload() {
   const control = getControlHealth();
+  const authStore = getAdminAuthStoreHealth();
+  const config = getActiveConfig();
+  const setupRequired = isSetupRequired();
+  const warnings: string[] = [];
+  if (!authStore.ready) warnings.push('auth_migration_incomplete');
+  else if (setupRequired && config.setupTokenState === 'missing') {
+    warnings.push('setup_token_missing');
+  } else if (setupRequired && config.setupTokenState === 'invalid') {
+    warnings.push('setup_token_invalid');
+  }
   return {
     ok: true,
     status: 'healthy',
     service: 'Helmora AI',
-    version: '0.1.0',
+    version: HUB_VERSION,
     controlState: control.controlPlane,
     servingReady: control.servingReady,
     recoveryReady: control.recoveryReady,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -30,14 +45,32 @@ runtimeRouter.get('/api/health', (_req, res) => {
 
 runtimeRouter.get('/ready', (_req, res) => {
   const control = getControlHealth();
-  res.status(control.servingReady ? 200 : 503).json({
-    ok: control.servingReady,
-    status: control.servingReady ? 'ready' : 'not_ready',
+  const authStore = getAdminAuthStoreHealth();
+  const config = getActiveConfig();
+  const setupUnavailable =
+    isSetupRequired() && config.setupTokenState !== 'valid';
+  const authReady = authStore.ready && !setupUnavailable;
+  const ready = control.servingReady && authReady;
+  res.status(ready ? 200 : 503).json({
+    ok: ready,
+    status: ready ? 'ready' : 'not_ready',
     service: 'Helmora AI',
-    version: '0.1.0',
+    version: HUB_VERSION,
     controlState: control.controlPlane,
     servingReady: control.servingReady,
     recoveryReady: control.recoveryReady,
+    ...(!authReady
+      ? {
+          error: {
+            type: authStore.ready
+              ? 'setup_unavailable'
+              : 'auth_migration_incomplete',
+            message: authStore.ready
+              ? 'Admin setup is unavailable until HELMORA_SETUP_TOKEN is configured.'
+              : 'Authentication storage migration is incomplete.',
+          },
+        }
+      : {}),
   });
 });
 
@@ -65,7 +98,7 @@ runtimeRouter.get('/state', requireControlSnapshot, async (_req, res, next) => {
       },
       runtime: {
         name: 'Helmora AI',
-        version: '0.1.0',
+        version: HUB_VERSION,
         vendor: 'Helmora.ai',
         status: 'running',
         active_model: mode,

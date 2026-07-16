@@ -1,6 +1,8 @@
 import type { Express } from 'express';
 import http from 'node:http';
 
+export const TEST_SETUP_TOKEN = `helmora-test-setup-${'x'.repeat(48)}`;
+
 type Response = {
   status: number;
   headers: Record<string, string>;
@@ -10,6 +12,7 @@ type Response = {
 class TestRequest {
   private headers: Record<string, string> = {};
   private payload: unknown = undefined;
+  private rawPayload = false;
   private method = 'GET';
   private path = '/';
 
@@ -58,6 +61,14 @@ class TestRequest {
 
   send(body: unknown) {
     this.payload = body;
+    this.rawPayload = false;
+    return this;
+  }
+
+  sendRaw(body: string | Buffer, contentType = 'application/json') {
+    this.payload = body;
+    this.rawPayload = true;
+    this.headers['content-type'] = contentType;
     return this;
   }
 
@@ -77,7 +88,11 @@ class TestRequest {
         }
 
         const body =
-          this.payload === undefined ? undefined : JSON.stringify(this.payload);
+          this.payload === undefined
+            ? undefined
+            : this.rawPayload
+              ? this.payload as string | Buffer
+              : JSON.stringify(this.payload);
         const headers: Record<string, string> = { ...this.headers };
         if (body !== undefined) {
           headers['content-type'] = 'application/json';
