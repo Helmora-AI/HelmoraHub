@@ -3,9 +3,17 @@ import { z } from 'zod';
 import { getConfigStore } from '../storage/index.js';
 import {
   ChatSessionNotFoundError,
+  CHAT_MAX_TOOL_ACTIVITIES,
   CHAT_MAX_MESSAGES_PER_SESSION,
   CHAT_MAX_SESSIONS,
 } from '../storage/chat-types.js';
+
+const toolActivitySchema = z.object({
+  toolId: z.enum(['web_search', 'web_fetch']),
+  status: z.enum(['completed', 'failed']),
+  sourceCount: z.number().int().min(0).max(10_000),
+  errorCode: z.string().max(120).nullable(),
+});
 
 const modelSelectionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('auto') }),
@@ -22,6 +30,7 @@ const messageSchema = z.object({
   content: z.string().max(200_000),
   status: z.enum(['streaming', 'complete', 'stopped', 'error']).optional(),
   errorCode: z.string().max(120).optional(),
+  toolActivities: z.array(toolActivitySchema).max(CHAT_MAX_TOOL_ACTIVITIES).optional(),
   createdAt: z.string().max(64).optional(),
 });
 

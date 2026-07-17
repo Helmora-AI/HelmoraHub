@@ -4,10 +4,15 @@ import type { RegisteredTool, ToolRuntimeConfig, ToolSurface } from '../tools/ty
 
 export type ToolsPolicy = 'off' | 'auto' | 'force';
 export type ToolRequestSource = 'api' | 'admin_chat';
+export type ToolRequestDecision =
+  | { kind: 'execute'; policy: 'auto' | 'force' }
+  | { kind: 'skip'; reason: 'policy_off' | 'runtime_disabled' | 'irrelevant' }
+  | { kind: 'blocked'; reason: 'runtime_disabled' | 'no_eligible_tools' };
 export type ToolRequestContext = {
   surface: ToolSurface;
   requestedPolicy: ToolsPolicy | undefined;
   effectivePolicy: ToolsPolicy;
+  decision: ToolRequestDecision;
   relevanceMatched: boolean;
   eligibleTools: readonly RegisteredTool[];
 };
@@ -15,6 +20,14 @@ export type ToolRequestContext = {
 export type ParsedToolsHeader =
   | { ok: true; value: ToolsPolicy | undefined }
   | { ok: false; value: null };
+
+export function blockedToolDecisionMessage(
+  reason: Extract<ToolRequestDecision, { kind: 'blocked' }>['reason'],
+): string {
+  return reason === 'runtime_disabled'
+    ? 'Tools are disabled. Enable the Tools runtime and TinyFish connector in Settings > Tools.'
+    : 'No eligible tools are enabled for this model surface. Review tool scopes in Settings > Tools.';
+}
 
 export function parseToolsHeader(value: unknown): ParsedToolsHeader {
   if (value === undefined) return { ok: true, value: undefined };
@@ -33,13 +46,33 @@ export function resolveToolsPolicy(input: {
   hasEligibleTools: boolean;
   relevanceMatched: boolean;
 }): ToolsPolicy {
-  if (!input.runtimeEnabled) return 'off';
+  const decision = decideToolsPolicy(input);
+  return decision.kind === 'execute' ? decision.policy : 'off';
+}
 
+export function decideToolsPolicy(input: {
+  runtimeEnabled: boolean;
+  requestHeader?: ToolsPolicy;
+  surfaceDefault: 'off' | 'auto';
+  hasEligibleTools: boolean;
+  relevanceMatched: boolean;
+}): ToolRequestDecision {
   const requested = input.requestHeader ?? input.surfaceDefault;
-  if (requested === 'off') return 'off';
-  if (!input.hasEligibleTools) return 'off';
-  if (requested === 'auto' && !input.relevanceMatched) return 'off';
-  return requested;
+  if (requested === 'off') return { kind: 'skip', reason: 'policy_off' };
+  if (!input.runtimeEnabled) {
+    return requested === 'force'
+      ? { kind: 'blocked', reason: 'runtime_disabled' }
+      : { kind: 'skip', reason: 'runtime_disabled' };
+  }
+  if (!input.hasEligibleTools) {
+    return requested === 'force'
+      ? { kind: 'blocked', reason: 'no_eligible_tools' }
+      : { kind: 'skip', reason: 'runtime_disabled' };
+  }
+  if (requested === 'auto' && !input.relevanceMatched) {
+    return { kind: 'skip', reason: 'irrelevant' };
+  }
+  return { kind: 'execute', policy: requested };
 }
 
 export function resolveToolSurface(model: string | undefined): ToolSurface {
@@ -108,6 +141,9 @@ const RELEVANCE_PHRASES = [
   'tim tren web',
   'tim kiem tren mang',
   'tra cuu',
+  'tra gia',
+  'hom nay',
+  'dung tool',
   'tim nguon',
   'trich dan nguon',
   'nghien cuu',
@@ -169,16 +205,18 @@ export function buildToolRequestContext(input: {
   const surface = resolveToolSurface(input.model);
   const eligibleTools = projectEligibleTools(input.config, surface);
   const relevanceMatched = hasToolRelevance(latestUserText(input.messages));
+  const decision = decideToolsPolicy({
+    runtimeEnabled: input.config.enabled,
+    requestHeader: input.requestHeader,
+    surfaceDefault: toolSurfaceDefault(surface, input.source),
+    hasEligibleTools: eligibleTools.length > 0,
+    relevanceMatched,
+  });
   return {
     surface,
     requestedPolicy: input.requestHeader,
-    effectivePolicy: resolveToolsPolicy({
-      runtimeEnabled: input.config.enabled,
-      requestHeader: input.requestHeader,
-      surfaceDefault: toolSurfaceDefault(surface, input.source),
-      hasEligibleTools: eligibleTools.length > 0,
-      relevanceMatched,
-    }),
+    effectivePolicy: decision.kind === 'execute' ? decision.policy : 'off',
+    decision,
     relevanceMatched,
     eligibleTools,
   };

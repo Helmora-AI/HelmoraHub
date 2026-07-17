@@ -127,6 +127,29 @@ describe('supabase-schema helpers', () => {
     expect(migration).not.toContain('truncate ');
   });
 
+  it('ships bounded redacted chat tool activities in canonical schema and migration 006', () => {
+    const canonical = fs.readFileSync(
+      path.resolve(process.cwd(), 'sql/supabase-schema.sql'),
+      'utf8'
+    ).toLowerCase();
+    const migration = fs.readFileSync(
+      path.resolve(process.cwd(), 'sql/migrations/006_chat_tool_activities.sql'),
+      'utf8'
+    ).toLowerCase();
+
+    for (const sql of [canonical, migration]) {
+      expect(sql).toContain("tool_activities jsonb not null default '[]'::jsonb");
+      expect(sql).toContain('create or replace function public.helmora_chat_tool_activities_valid');
+      expect(sql).toContain('jsonb_array_length(p_activities) <= 20');
+      expect(sql).toContain("coalesce(item -> 'toolactivities', '[]'::jsonb)");
+      expect(sql).not.toContain('tool_query');
+      expect(sql).not.toContain('tool_url');
+    }
+    expect(migration).toContain('alter table public.helmora_chat_messages');
+    expect(migration).not.toContain('drop table');
+    expect(migration).not.toContain('truncate ');
+  });
+
   it('exposes API hints', () => {
     const hints = supabaseSchemaApiHints();
     expect(hints.path).toBe('sql/supabase-schema.sql');

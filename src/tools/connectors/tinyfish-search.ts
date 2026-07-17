@@ -72,7 +72,7 @@ export function validateWebSearchInput(value: unknown): WebSearchInput {
   if (!query) invalid('tool_invalid_arguments', 'query is required.');
   const location = optionalText(source, 'location', 2, /^[A-Za-z]{2}$/)?.toUpperCase();
   const language = optionalText(source, 'language', 35, /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/);
-  const purpose = optionalText(source, 'purpose', 500);
+  const purpose = optionalText(source, 'purpose', 2_000);
   const afterDate = optionalText(source, 'afterDate', 10, DATE_PATTERN);
   const beforeDate = optionalText(source, 'beforeDate', 10, DATE_PATTERN);
   if (afterDate && !isCalendarDate(afterDate)) invalid('tool_invalid_arguments', 'afterDate is invalid.');
@@ -85,7 +85,7 @@ export function validateWebSearchInput(value: unknown): WebSearchInput {
   const recencyMinutes = source.recencyMinutes;
   if (
     recencyMinutes !== undefined
-    && (!Number.isInteger(recencyMinutes) || Number(recencyMinutes) < 1 || Number(recencyMinutes) > 525_600)
+    && (!Number.isInteger(recencyMinutes) || Number(recencyMinutes) < 1 || Number(recencyMinutes) > 5_256_000)
   ) {
     invalid('tool_invalid_arguments', 'recencyMinutes is invalid.');
   }

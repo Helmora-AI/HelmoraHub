@@ -283,6 +283,27 @@ describe('canonical tool loop', () => {
     })).rejects.toMatchObject({ code: 'tool_connector_timeout' });
   });
 
+  it('supports a longer bounded timeout for Fetch without weakening Search', async () => {
+    const connectorTimeoutFor = vi.fn((tool: typeof searchTool) => (
+      tool.id === 'web_fetch' ? 5 : 1_000
+    ));
+    await expect(runToolLoop({
+      eligibleTools: [fetchTool],
+      limits: { totalTimeoutMs: 1_000 },
+      connectorTimeoutFor,
+      decide: async () => ({
+        kind: 'calls',
+        calls: [{
+          id: 'slow-fetch',
+          toolId: 'web_fetch',
+          arguments: { urls: ['https://example.com'] },
+        }],
+      }),
+      execute: async () => new Promise<NormalizedToolResult>(() => undefined),
+    })).rejects.toMatchObject({ code: 'tool_connector_timeout' });
+    expect(connectorTimeoutFor).toHaveBeenCalledWith(fetchTool);
+  });
+
   it('aborts planning when the total Tool Runtime wall clock expires', async () => {
     await expect(runToolLoop({
       eligibleTools: [searchTool],

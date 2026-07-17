@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TOOL_RUNTIME_CONFIG } from '../services/tool-config.js';
 import {
+  decideToolsPolicy,
   hasToolRelevance,
   hasUnsupportedClientTools,
   parseToolsHeader,
@@ -11,6 +12,32 @@ import {
 } from '../services/tool-request-policy.js';
 
 describe('tool request policy', () => {
+  it('distinguishes intentional skips from actionable blocked requests', () => {
+    const ready = {
+      runtimeEnabled: true,
+      surfaceDefault: 'auto' as const,
+      hasEligibleTools: true,
+      relevanceMatched: true,
+    };
+
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'auto' })).toEqual({
+      kind: 'execute',
+      policy: 'auto',
+    });
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'off' })).toEqual({
+      kind: 'skip',
+      reason: 'policy_off',
+    });
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'auto', relevanceMatched: false }))
+      .toEqual({ kind: 'skip', reason: 'irrelevant' });
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'force', runtimeEnabled: false }))
+      .toEqual({ kind: 'blocked', reason: 'runtime_disabled' });
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'force', hasEligibleTools: false }))
+      .toEqual({ kind: 'blocked', reason: 'no_eligible_tools' });
+    expect(decideToolsPolicy({ ...ready, requestHeader: 'force', relevanceMatched: false }))
+      .toEqual({ kind: 'execute', policy: 'force' });
+  });
+
   it('gives the administrative kill switch absolute precedence', () => {
     expect(resolveToolsPolicy({
       runtimeEnabled: false,
@@ -76,6 +103,8 @@ describe('tool request policy', () => {
     expect(hasToolRelevance('Tìm nguồn mới nhất về chính sách này.')).toBe(true);
     expect(hasToolRelevance('Tim nguon moi nhat ve chinh sach nay.')).toBe(true);
     expect(hasToolRelevance('Read https://example.com/report for me.')).toBe(true);
+    expect(hasToolRelevance('Tra giá vàng hôm nay')).toBe(true);
+    expect(hasToolRelevance('Hãy dùng tools để tra giá vàng hôm nay')).toBe(true);
     expect(hasToolRelevance('Xin chào, bạn khỏe không?')).toBe(false);
     expect(hasToolRelevance('Refactor the current implementation.')).toBe(false);
   });

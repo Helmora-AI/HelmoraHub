@@ -89,6 +89,11 @@ describe('Tools admin API', () => {
       status: 'disabled',
     });
     expect(response.body.orchestrator).toEqual({ primary: null, fallback: null });
+    expect(response.body.runtime).toEqual({
+      status: 'disabled',
+      executable: false,
+      blockingReasons: ['runtime_disabled', 'connector_disabled'],
+    });
     expect(response.body.activity).toEqual([]);
   });
 
@@ -129,6 +134,11 @@ describe('Tools admin API', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.config.enabled).toBe(true);
+    expect(response.body.runtime).toEqual({
+      status: 'blocked',
+      executable: false,
+      blockingReasons: ['connector_disabled', 'tool_orchestrator_unavailable'],
+    });
     expect(response.body.orchestrator.primary.catalogId).toBe(primaryCatalogId);
     expect(response.body.orchestrator.fallback.catalogId).toBe(fallbackCatalogId);
     expect(JSON.parse((await getConfigStore().getSetting('tool_runtime_v1'))!)).toEqual(draft);

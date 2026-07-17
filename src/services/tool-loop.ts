@@ -13,7 +13,17 @@ import type {
   RegisteredToolId,
 } from '../tools/types.js';
 
-export const DEFAULT_TOOL_LOOP_LIMITS = Object.freeze({
+export type ToolLoopLimits = {
+  maxToolRounds: number;
+  maxCallsPerRound: number;
+  maxTotalCalls: number;
+  totalTimeoutMs: number;
+  connectorTimeoutMs: number;
+  maxResultBytes: number;
+  maxContextBytes: number;
+};
+
+export const DEFAULT_TOOL_LOOP_LIMITS: Readonly<ToolLoopLimits> = Object.freeze({
   maxToolRounds: 4,
   maxCallsPerRound: 4,
   maxTotalCalls: 8,
@@ -22,8 +32,6 @@ export const DEFAULT_TOOL_LOOP_LIMITS = Object.freeze({
   maxResultBytes: 64 * 1_024,
   maxContextBytes: 128 * 1_024,
 });
-
-export type ToolLoopLimits = typeof DEFAULT_TOOL_LOOP_LIMITS;
 
 export type ProposedToolCall = {
   id: string;
@@ -208,6 +216,7 @@ export async function runToolLoop<T>(input: {
   }) => boolean | Promise<boolean>;
   signal?: AbortSignal;
   limits?: Partial<ToolLoopLimits>;
+  connectorTimeoutFor?: (tool: RegisteredTool) => number;
   modelContextMaxBytes?: number;
 }): Promise<ToolLoopOutcome<T>> {
   const limits = resolveLimits(input.limits);
@@ -280,9 +289,15 @@ export async function runToolLoop<T>(input: {
         }
         let reusable = deduplicated.get(item.dedupeKey);
         if (!reusable) {
+          const connectorTimeoutMs = input.connectorTimeoutFor
+            ? positiveInteger(
+                input.connectorTimeoutFor(current.tool),
+                `connectorTimeoutFor(${current.tool.id})`,
+              )
+            : limits.connectorTimeoutMs;
           const connector = scopedSignal(
             lifecycle.signal,
-            limits.connectorTimeoutMs,
+            connectorTimeoutMs,
             'tool_connector_timeout',
           );
           let bounded: ModelToolResult;

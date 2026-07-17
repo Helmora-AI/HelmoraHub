@@ -6,6 +6,7 @@ import type {
   CreateApiKeyInput,
   ModelPricing,
   UsageEvent,
+  UsageEventCreate,
 } from '../keys/types.js';
 import {
   apiKeyHint,
@@ -750,7 +751,7 @@ export class HybridConfigStore implements ConfigStore {
   }
 
   async recordUsage(
-    event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }
+    event: UsageEventCreate
   ): Promise<UsageEvent> {
     return this.workspace.recordUsage(event);
   }

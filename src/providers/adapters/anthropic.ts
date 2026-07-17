@@ -1,7 +1,75 @@
 import type { ProviderToggle } from '../../types.js';
 import type { ChatMessage, ChatRequest, UpstreamResult, UpstreamStreamResult } from '../../services/upstream.js';
+import type { ProposedToolCall } from '../../services/tool-loop.js';
+import type { RegisteredTool } from '../../tools/types.js';
+import type { ModelToolResult } from '../../tools/untrusted-context.js';
+import {
+  ProviderToolProtocolError,
+  assertCallId,
+  assertKnownTool,
+  pairToolResults,
+  serializeModelToolResult,
+} from '../native-tools.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
+
+export function toAnthropicTools(definitions: readonly RegisteredTool[]) {
+  return definitions.map((tool) => ({
+    name: tool.id,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
+}
+
+export function parseAnthropicToolCalls(
+  body: unknown,
+  definitions: readonly RegisteredTool[],
+): ProposedToolCall[] {
+  if (!body || typeof body !== 'object') return [];
+  const content = (body as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  const seen = new Set<string>();
+  return content.flatMap((raw): ProposedToolCall[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const block = raw as { type?: unknown; id?: unknown; name?: unknown; input?: unknown };
+    if (block.type !== 'tool_use') return [];
+    if (!block.input || typeof block.input !== 'object' || Array.isArray(block.input)) {
+      throw new ProviderToolProtocolError('anthropic_invalid_tool_arguments', 'Tool input must be an object.');
+    }
+    return [{
+      id: assertCallId({ protocol: 'anthropic', value: block.id, seen }),
+      toolId: assertKnownTool({ protocol: 'anthropic', name: block.name, definitions }),
+      arguments: block.input as Record<string, unknown>,
+    }];
+  });
+}
+
+export function toAnthropicToolMessages(
+  calls: readonly ProposedToolCall[],
+  results: readonly ModelToolResult[],
+) {
+  const pairs = pairToolResults('anthropic', calls, results);
+  return [
+    {
+      role: 'assistant' as const,
+      content: calls.map((call) => ({
+        type: 'tool_use' as const,
+        id: call.id,
+        name: call.toolId,
+        input: call.arguments,
+      })),
+    },
+    {
+      role: 'user' as const,
+      content: pairs.map(({ call, result }) => ({
+        type: 'tool_result' as const,
+        tool_use_id: call.id,
+        content: serializeModelToolResult(result),
+        is_error: result.isError,
+      })),
+    },
+  ];
+}
 
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -96,15 +164,17 @@ function toOpenAIBody(
   model: string,
   anthropicBody: {
     id?: string;
-    content?: Array<{ type?: string; text?: string }>;
+    content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>;
     stop_reason?: string;
     usage?: { input_tokens?: number; output_tokens?: number };
-  }
+  },
+  definitions: readonly RegisteredTool[] = [],
 ): unknown {
   const text = (anthropicBody.content ?? [])
     .filter((c) => c.type === 'text' && c.text)
     .map((c) => c.text)
     .join('');
+  const calls = definitions.length > 0 ? parseAnthropicToolCalls(anthropicBody, definitions) : [];
   return {
     id: anthropicBody.id ?? `chatcmpl-${providerId}`,
     object: 'chat.completion',
@@ -113,8 +183,20 @@ function toOpenAIBody(
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content: text },
-        finish_reason: anthropicBody.stop_reason === 'max_tokens' ? 'length' : 'stop',
+        message: {
+          role: 'assistant',
+          content: text || (calls.length > 0 ? null : ''),
+          ...(calls.length > 0 ? {
+            tool_calls: calls.map((call) => ({
+              id: call.id,
+              type: 'function',
+              function: { name: call.toolId, arguments: JSON.stringify(call.arguments) },
+            })),
+          } : {}),
+        },
+        finish_reason: calls.length > 0
+          ? 'tool_calls'
+          : anthropicBody.stop_reason === 'max_tokens' ? 'length' : 'stop',
       },
     ],
     usage: {
@@ -147,7 +229,16 @@ export async function callAnthropicCompatible(
     };
   }
 
-  const { system, messages } = toAnthropicMessages(request.messages);
+  const { system, messages: baseMessages } = toAnthropicMessages(request.messages);
+  const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [...baseMessages];
+  if (request.toolRound?.calls?.length) {
+    if (!request.toolRound.results) {
+      return { ok: false, status: 400, providerId: provider.id, model, body: null, error: 'anthropic_invalid_tool_result' };
+    }
+    messages.push(...toAnthropicToolMessages(request.toolRound.calls, request.toolRound.results));
+  } else if (request.toolRound?.results?.length) {
+    return { ok: false, status: 400, providerId: provider.id, model, body: null, error: 'anthropic_invalid_tool_result' };
+  }
   const maxTokens =
     typeof request.max_tokens === 'number' && request.max_tokens > 0
       ? request.max_tokens
@@ -162,6 +253,7 @@ export async function callAnthropicCompatible(
         model,
         max_tokens: maxTokens,
         messages,
+        ...(request.toolRound ? { tools: toAnthropicTools(request.toolRound.definitions) } : {}),
         ...(system ? { system } : {}),
         ...(typeof request.temperature === 'number' ? { temperature: request.temperature } : {}),
         stream: false,
@@ -196,7 +288,12 @@ export async function callAnthropicCompatible(
       status: 200,
       providerId: provider.id,
       model,
-      body: toOpenAIBody(provider.id, model, body as Parameters<typeof toOpenAIBody>[2]),
+      body: toOpenAIBody(
+        provider.id,
+        model,
+        body as Parameters<typeof toOpenAIBody>[2],
+        request.toolRound?.definitions,
+      ),
     };
   } catch (err) {
     return {

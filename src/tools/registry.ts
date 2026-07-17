@@ -30,11 +30,11 @@ export const REGISTERED_TOOLS: readonly RegisteredTool[] = deepFreeze([
         location: { type: 'string', minLength: 1, maxLength: 200 },
         language: { type: 'string', minLength: 2, maxLength: 35 },
         page: { type: 'integer', minimum: 0, maximum: 10 },
-        recencyMinutes: { type: 'integer', minimum: 1 },
+        recencyMinutes: { type: 'integer', minimum: 1, maximum: 5_256_000 },
         afterDate: { type: 'string', format: 'date' },
         beforeDate: { type: 'string', format: 'date' },
         domainType: { enum: ['web', 'news', 'research_paper'] },
-        purpose: { type: 'string', maxLength: 500 },
+        purpose: { type: 'string', maxLength: 2_000 },
       },
     },
     outputSchema: {

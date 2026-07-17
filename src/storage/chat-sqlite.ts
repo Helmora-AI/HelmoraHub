@@ -5,6 +5,7 @@ import {
   CHAT_MAX_CONTENT_CHARS,
   CHAT_MAX_MESSAGES_PER_SESSION,
   CHAT_MAX_SESSIONS,
+  normalizeChatToolActivities,
   type AppendChatMessageInput,
   type CreateChatSessionInput,
   type ImportChatStoreInput,
@@ -35,6 +36,7 @@ type MessageRow = {
   content: string;
   status: string | null;
   error_code: string | null;
+  tool_activities: string | null;
   created_at: string;
   seq: number;
 };
@@ -76,6 +78,13 @@ function mapMessage(row: MessageRow): StoredChatMessage {
     content: row.content,
     status: status || undefined,
     errorCode: row.error_code || undefined,
+    toolActivities: normalizeChatToolActivities((() => {
+      try {
+        return JSON.parse(row.tool_activities ?? '[]');
+      } catch {
+        return [];
+      }
+    })()),
     createdAt: row.created_at,
     seq: row.seq,
   };
@@ -111,6 +120,7 @@ export function ensureChatTables(db: Database.Database): void {
       content TEXT NOT NULL,
       status TEXT,
       error_code TEXT,
+      tool_activities TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       seq INTEGER NOT NULL
     );
@@ -121,6 +131,10 @@ export function ensureChatTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS chat_messages_session_seq_idx
       ON chat_messages (session_id, seq);
   `);
+  const columns = db.prepare('PRAGMA table_info(chat_messages)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'tool_activities')) {
+    db.exec("ALTER TABLE chat_messages ADD COLUMN tool_activities TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function messageCount(db: Database.Database, sessionId: string): number {
@@ -178,8 +192,8 @@ function insertMessages(
 ): StoredChatMessage[] {
   const insert = db.prepare(
     `INSERT INTO chat_messages
-      (id, session_id, role, content, status, error_code, created_at, seq)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, session_id, role, content, status, error_code, tool_activities, created_at, seq)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const out: StoredChatMessage[] = [];
   let seq = startSeq;
@@ -195,6 +209,7 @@ function insertMessages(
       content,
       msg.status ?? null,
       msg.errorCode ?? null,
+      JSON.stringify(normalizeChatToolActivities(msg.toolActivities)),
       createdAt,
       seq
     );
@@ -204,6 +219,7 @@ function insertMessages(
       content,
       status: msg.status,
       errorCode: msg.errorCode,
+      toolActivities: normalizeChatToolActivities(msg.toolActivities),
       createdAt,
       seq,
     });
@@ -473,6 +489,7 @@ export function sqliteImportChatStore(
           content: m.content,
           status: m.status,
           errorCode: m.errorCode,
+          toolActivities: m.toolActivities,
           createdAt: m.createdAt,
         }));
       const inserted = insertMessages(db, id, msgs, 0);

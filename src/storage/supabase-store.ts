@@ -19,6 +19,7 @@ import type {
   CreateApiKeyInput,
   ModelPricing,
   UsageEvent,
+  UsageEventCreate,
   UsageEventSource,
   UsageEventStatus,
 } from '../keys/types.js';
@@ -915,7 +916,7 @@ export class SupabaseConfigStore implements ConfigStore {
   }
 
   async recordUsage(
-    event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }
+    event: UsageEventCreate
   ): Promise<UsageEvent> {
     const id = event.id ?? randomId('usage');
     const createdAt = Date.now();
@@ -925,6 +926,8 @@ export class SupabaseConfigStore implements ConfigStore {
     const row: UsageEvent = {
       id,
       requestId,
+      parentRequestId: event.parentRequestId ?? null,
+      toolRunId: event.toolRunId ?? null,
       source,
       apiKeyId: event.apiKeyId ?? null,
       status: (event.status ?? 'complete') as UsageEventStatus,
@@ -934,6 +937,8 @@ export class SupabaseConfigStore implements ConfigStore {
       miniRole: event.miniRole ?? null,
       miniSlot: event.miniSlot ?? null,
       miniCatalogId: event.miniCatalogId ?? null,
+      usagePhase: event.usagePhase ?? 'answer',
+      toolRound: event.toolRound ?? null,
       costMicrosUsd: Math.round(Number(event.costMicrosUsd) || 0),
       promptTokens: event.promptTokens ?? null,
       completionTokens: event.completionTokens ?? null,
@@ -1135,6 +1140,8 @@ function normalizeUsageEvent(raw: unknown): UsageEvent {
   return {
     id,
     requestId: typeof e.requestId === 'string' ? e.requestId : `legacy_${id}`,
+    parentRequestId: e.parentRequestId == null ? null : String(e.parentRequestId),
+    toolRunId: e.toolRunId == null ? null : String(e.toolRunId),
     source: e.source === 'admin_chat' ? 'admin_chat' : 'api',
     apiKeyId: e.apiKeyId == null ? null : String(e.apiKeyId),
     status:
@@ -1153,6 +1160,13 @@ function normalizeUsageEvent(raw: unknown): UsageEvent {
         : null,
     miniSlot: e.miniSlot === 'primary' || e.miniSlot === 'fallback' ? e.miniSlot : null,
     miniCatalogId: e.miniCatalogId == null ? null : String(e.miniCatalogId),
+    usagePhase:
+      e.usagePhase === 'tool_planner' || e.usagePhase === 'tool_synthesis'
+        ? e.usagePhase
+        : 'answer',
+    toolRound: Number.isInteger(e.toolRound) && Number(e.toolRound) >= 0
+      ? Number(e.toolRound)
+      : null,
     costMicrosUsd: costMicros,
     promptTokens: e.promptTokens == null ? null : Number(e.promptTokens),
     completionTokens: e.completionTokens == null ? null : Number(e.completionTokens),

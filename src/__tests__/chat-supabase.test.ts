@@ -28,6 +28,12 @@ const row = {
   content: 'hello',
   status: null,
   error_code: null,
+  tool_activities: [{
+    toolId: 'web_search',
+    status: 'completed',
+    sourceCount: 1,
+    errorCode: null,
+  }],
   created_at: '2026-07-16T00:00:00.000Z',
   seq: 1,
 };
@@ -39,6 +45,7 @@ describe('Supabase atomic chat RPC adapter', () => {
       id: 'message-1',
       role: 'user',
       content: 'hello',
+      toolActivities: row.tool_activities,
       createdAt: row.created_at,
     }]);
     expect(calls).toEqual([{
@@ -51,11 +58,16 @@ describe('Supabase atomic chat RPC adapter', () => {
           content: 'hello',
           status: null,
           errorCode: null,
+          toolActivities: row.tool_activities,
           createdAt: row.created_at,
         }],
       },
     }]);
-    expect(messages[0]).toMatchObject({ id: 'message-1', seq: 1 });
+    expect(messages[0]).toMatchObject({
+      id: 'message-1',
+      seq: 1,
+      toolActivities: row.tool_activities,
+    });
   });
 
   it('replaces through one RPC and preserves an empty replacement', async () => {

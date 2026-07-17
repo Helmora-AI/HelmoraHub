@@ -1,5 +1,14 @@
 import type { ProviderToggle } from '../../types.js';
 import type { ChatMessage, ChatRequest, UpstreamResult, UpstreamStreamResult } from '../../services/upstream.js';
+import type { ProposedToolCall } from '../../services/tool-loop.js';
+import type { RegisteredTool } from '../../tools/types.js';
+import type { ModelToolResult } from '../../tools/untrusted-context.js';
+import {
+  ProviderToolProtocolError,
+  assertKnownTool,
+  pairToolResults,
+  serializeModelToolResult,
+} from '../native-tools.js';
 
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -19,8 +28,75 @@ function textFromContent(content: unknown): string {
   return texts.join('\n');
 }
 
-type GeminiPart = { text?: string };
+type GeminiPart = {
+  text?: string;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+};
 type GeminiContent = { role: 'user' | 'model'; parts: GeminiPart[] };
+
+export function toGeminiTools(definitions: readonly RegisteredTool[]) {
+  return [{
+    functionDeclarations: definitions.map((tool) => ({
+      name: tool.id,
+      description: tool.description,
+      parameters: tool.inputSchema,
+    })),
+  }];
+}
+
+export function parseGeminiToolCalls(
+  body: unknown,
+  definitions: readonly RegisteredTool[],
+  round: number,
+): ProposedToolCall[] {
+  if (!body || typeof body !== 'object') return [];
+  const candidates = (body as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) return [];
+  const first = candidates[0];
+  const parts = first && typeof first === 'object'
+    ? (first as { content?: { parts?: unknown } }).content?.parts
+    : undefined;
+  if (!Array.isArray(parts)) return [];
+  return parts.flatMap((raw, index): ProposedToolCall[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const call = (raw as { functionCall?: unknown }).functionCall;
+    if (!call || typeof call !== 'object') return [];
+    const value = call as { name?: unknown; args?: unknown };
+    if (!value.args || typeof value.args !== 'object' || Array.isArray(value.args)) {
+      throw new ProviderToolProtocolError('gemini_invalid_tool_arguments', 'Tool arguments must be an object.');
+    }
+    return [{
+      id: `gemini_call_${round}_${index}`,
+      toolId: assertKnownTool({ protocol: 'gemini', name: value.name, definitions }),
+      arguments: value.args as Record<string, unknown>,
+    }];
+  });
+}
+
+export function toGeminiToolContents(
+  calls: readonly ProposedToolCall[],
+  results: readonly ModelToolResult[],
+) {
+  const pairs = pairToolResults('gemini', calls, results);
+  return [
+    {
+      role: 'model' as const,
+      parts: calls.map((call) => ({
+        functionCall: { name: call.toolId, args: call.arguments },
+      })),
+    },
+    {
+      role: 'user' as const,
+      parts: pairs.map(({ call, result }) => ({
+        functionResponse: {
+          name: call.toolId,
+          response: { result: serializeModelToolResult(result) },
+        },
+      })),
+    },
+  ];
+}
 
 export function toGeminiContents(messages: ChatMessage[]): {
   systemInstruction?: { parts: GeminiPart[] };
@@ -109,7 +185,16 @@ export async function callGeminiCompatible(
     };
   }
 
-  const { systemInstruction, contents } = toGeminiContents(request.messages);
+  const { systemInstruction, contents: baseContents } = toGeminiContents(request.messages);
+  const contents: GeminiContent[] = [...baseContents];
+  if (request.toolRound?.calls?.length) {
+    if (!request.toolRound.results) {
+      return { ok: false, status: 400, providerId: provider.id, model, body: null, error: 'gemini_invalid_tool_result' };
+    }
+    contents.push(...toGeminiToolContents(request.toolRound.calls, request.toolRound.results));
+  } else if (request.toolRound?.results?.length) {
+    return { ok: false, status: 400, providerId: provider.id, model, body: null, error: 'gemini_invalid_tool_result' };
+  }
   const url = buildGeminiUrl(provider, model, false);
   const maxTokens =
     typeof request.max_tokens === 'number' && request.max_tokens > 0
@@ -125,6 +210,7 @@ export async function callGeminiCompatible(
       },
       body: JSON.stringify({
         contents,
+        ...(request.toolRound ? { tools: toGeminiTools(request.toolRound.definitions) } : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         generationConfig: {
           ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
@@ -167,6 +253,9 @@ export async function callGeminiCompatible(
         candidatesTokenCount?: number;
       };
     }).usageMetadata;
+    const calls = request.toolRound
+      ? parseGeminiToolCalls(body, request.toolRound.definitions, request.toolRound.round ?? 0)
+      : [];
 
     return {
       ok: true,
@@ -181,8 +270,18 @@ export async function callGeminiCompatible(
         choices: [
           {
             index: 0,
-            message: { role: 'assistant', content },
-            finish_reason: 'stop',
+            message: {
+              role: 'assistant',
+              content: content || (calls.length > 0 ? null : ''),
+              ...(calls.length > 0 ? {
+                tool_calls: calls.map((call) => ({
+                  id: call.id,
+                  type: 'function',
+                  function: { name: call.toolId, arguments: JSON.stringify(call.arguments) },
+                })),
+              } : {}),
+            },
+            finish_reason: calls.length > 0 ? 'tool_calls' : 'stop',
           },
         ],
         usage: {

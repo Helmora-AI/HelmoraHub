@@ -18,6 +18,7 @@ import type {
   CreateApiKeyInput,
   ModelPricing,
   UsageEvent,
+  UsageEventCreate,
   UsageEventSource,
   UsageEventStatus,
 } from '../keys/types.js';
@@ -118,6 +119,8 @@ type ApiKeyRow = {
 type UsageRow = {
   id: string;
   request_id: string;
+  parent_request_id: string | null;
+  tool_run_id: string | null;
   source: string;
   api_key_id: string | null;
   status: string;
@@ -127,6 +130,8 @@ type UsageRow = {
   mini_role: UsageEvent['miniRole'];
   mini_slot: UsageEvent['miniSlot'];
   mini_catalog_id: string | null;
+  usage_phase: UsageEvent['usagePhase'];
+  tool_round: number | null;
   cost_micros_usd: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -314,6 +319,8 @@ export class SqliteConfigStore implements ConfigStore {
       CREATE TABLE IF NOT EXISTS usage_events (
         id TEXT PRIMARY KEY,
         request_id TEXT NOT NULL,
+        parent_request_id TEXT,
+        tool_run_id TEXT,
         source TEXT NOT NULL DEFAULT 'api',
         api_key_id TEXT,
         status TEXT NOT NULL DEFAULT 'complete',
@@ -323,6 +330,8 @@ export class SqliteConfigStore implements ConfigStore {
         mini_role TEXT,
         mini_slot TEXT,
         mini_catalog_id TEXT,
+        usage_phase TEXT NOT NULL DEFAULT 'answer',
+        tool_round INTEGER,
         cost_micros_usd INTEGER NOT NULL DEFAULT 0,
         prompt_tokens INTEGER,
         completion_tokens INTEGER,
@@ -372,6 +381,10 @@ export class SqliteConfigStore implements ConfigStore {
     add('mini_role', 'mini_role TEXT');
     add('mini_slot', 'mini_slot TEXT');
     add('mini_catalog_id', 'mini_catalog_id TEXT');
+    add('parent_request_id', 'parent_request_id TEXT');
+    add('tool_run_id', 'tool_run_id TEXT');
+    add('usage_phase', "usage_phase TEXT NOT NULL DEFAULT 'answer'");
+    add('tool_round', 'tool_round INTEGER');
     const needsRebuild =
       !cols.has('request_id') ||
       !cols.has('source') ||
@@ -1099,7 +1112,7 @@ export class SqliteConfigStore implements ConfigStore {
   }
 
   async recordUsage(
-    event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }
+    event: UsageEventCreate
   ): Promise<UsageEvent> {
     const id = event.id ?? randomId('usage');
     const createdAt = Date.now();
@@ -1111,6 +1124,8 @@ export class SqliteConfigStore implements ConfigStore {
     const row: UsageEvent = {
       id,
       requestId,
+      parentRequestId: event.parentRequestId ?? null,
+      toolRunId: event.toolRunId ?? null,
       source,
       apiKeyId: event.apiKeyId ?? null,
       status,
@@ -1120,6 +1135,8 @@ export class SqliteConfigStore implements ConfigStore {
       miniRole: event.miniRole ?? null,
       miniSlot: event.miniSlot ?? null,
       miniCatalogId: event.miniCatalogId ?? null,
+      usagePhase: event.usagePhase ?? 'answer',
+      toolRound: event.toolRound ?? null,
       costMicrosUsd,
       promptTokens: event.promptTokens ?? null,
       completionTokens: event.completionTokens ?? null,
@@ -1131,14 +1148,17 @@ export class SqliteConfigStore implements ConfigStore {
       this.db
         .prepare(
           `INSERT INTO usage_events
-            (id, request_id, source, api_key_id, status, model, underlying_models,
-             provider_id, mini_role, mini_slot, mini_catalog_id, cost_micros_usd,
-             prompt_tokens, completion_tokens, estimated, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            (id, request_id, parent_request_id, tool_run_id, source, api_key_id, status,
+             model, underlying_models, provider_id, mini_role, mini_slot, mini_catalog_id,
+             usage_phase, tool_round, cost_micros_usd, prompt_tokens, completion_tokens,
+             estimated, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           row.id,
           row.requestId,
+          row.parentRequestId,
+          row.toolRunId,
           row.source,
           row.apiKeyId,
           row.status,
@@ -1148,6 +1168,8 @@ export class SqliteConfigStore implements ConfigStore {
           row.miniRole,
           row.miniSlot,
           row.miniCatalogId,
+          row.usagePhase,
+          row.toolRound,
           row.costMicrosUsd,
           row.promptTokens,
           row.completionTokens,
@@ -1182,6 +1204,8 @@ export class SqliteConfigStore implements ConfigStore {
     return {
       id: row.id,
       requestId: row.request_id,
+      parentRequestId: row.parent_request_id ?? null,
+      toolRunId: row.tool_run_id ?? null,
       source: (row.source === 'admin_chat' ? 'admin_chat' : 'api') as UsageEventSource,
       apiKeyId: row.api_key_id,
       status: (['complete', 'stopped', 'error'].includes(row.status)
@@ -1193,6 +1217,8 @@ export class SqliteConfigStore implements ConfigStore {
       miniRole: row.mini_role ?? null,
       miniSlot: row.mini_slot ?? null,
       miniCatalogId: row.mini_catalog_id ?? null,
+      usagePhase: row.usage_phase ?? 'answer',
+      toolRound: row.tool_round ?? null,
       costMicrosUsd: Number(row.cost_micros_usd) || 0,
       promptTokens: row.prompt_tokens,
       completionTokens: row.completion_tokens,

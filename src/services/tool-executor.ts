@@ -22,6 +22,9 @@ export type ToolExecutionResult = {
   attempts: number;
 };
 
+export const TINYFISH_SEARCH_TIMEOUT_MS = 10_000;
+export const TINYFISH_FETCH_TIMEOUT_MS = 115_000;
+
 export class ToolRateLimitError extends TinyFishConnectorError {
   constructor(
     public readonly remaining: number,
@@ -192,6 +195,7 @@ export class TinyFishToolExecutor {
         apiKey: this.options.apiKey,
         input: normalized,
         fetchImpl: this.options.fetchImpl,
+        timeoutMs: TINYFISH_SEARCH_TIMEOUT_MS,
         signal: execution.signal,
       });
     }, execution.signal);
@@ -242,6 +246,7 @@ export class TinyFishToolExecutor {
           input: { urls: [target.url], format: normalized.format },
           lookup,
           fetchImpl: this.options.fetchImpl,
+          timeoutMs: TINYFISH_FETCH_TIMEOUT_MS,
           signal: execution.signal,
         });
       }, execution.signal);

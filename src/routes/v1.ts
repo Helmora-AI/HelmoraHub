@@ -44,10 +44,18 @@ import {
 import { classifyMiniIntent } from '../services/mini-classifier.js';
 import { getToolRuntimeConfig } from '../services/tool-config.js';
 import {
+  blockedToolDecisionMessage,
   buildToolRequestContext,
   hasUnsupportedClientTools,
   parseToolsHeader,
 } from '../services/tool-request-policy.js';
+import {
+  executeChatToolRuntime,
+  requireApiKeyToolRuntimeAccess,
+  withToolSynthesisContext,
+} from '../services/chat-tool-execution.js';
+import { ToolRuntimeCoordinatorError } from '../services/tool-runtime-coordinator.js';
+import { resolveToolOrchestratorAttempts } from '../services/tool-orchestrator-route.js';
 
 export const v1Router = Router();
 
@@ -216,6 +224,7 @@ v1Router.post('/embeddings', async (req, res, next) => {
 
 v1Router.post('/chat/completions', async (req, res, next) => {
   try {
+    const requestId = randomId('req');
     const parsed = chatSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
@@ -246,13 +255,33 @@ v1Router.post('/chat/completions', async (req, res, next) => {
     }
 
     const body = parsed.data;
-    res.locals.helmoraTools = buildToolRequestContext({
-      config: await getToolRuntimeConfig(),
+    const toolConfig = await getToolRuntimeConfig();
+    const toolContext = buildToolRequestContext({
+      config: toolConfig,
       model: body.model ?? 'auto',
       source: 'api',
       requestHeader: toolsHeader.value,
       messages: body.messages,
     });
+    res.locals.helmoraTools = toolContext;
+    if (toolContext.decision.kind === 'blocked') {
+      res.status(409).json({
+        error: {
+          type: toolContext.decision.reason,
+          message: blockedToolDecisionMessage(toolContext.decision.reason),
+          requestId,
+        },
+      });
+      return;
+    }
+    const toolOrchestrator = toolContext.decision.kind === 'execute'
+      ? await Promise.all([
+          getConfigStore().listHubModels({ limit: 500 }),
+          getConfigStore().listProviders(),
+        ]).then(([catalog, providers]) => (
+          resolveToolOrchestratorAttempts(toolConfig, catalog.models, providers)
+        ))
+      : null;
     const headerMode =
       req.header('x-helmora-mode') ??
       req.header('x-ctrl-mode') ??
@@ -345,6 +374,238 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       identityResolved.identity.enabled ? 'on' : 'off'
     );
 
+    type V1ToolRouteResult =
+      | Awaited<ReturnType<typeof routeChat>>
+      | Awaited<ReturnType<typeof routeMiniChat>>;
+    let precomputedToolResult: V1ToolRouteResult | null = null;
+    let toolUsageRecorded = false;
+    let plannerCatalogId: string | null = null;
+    let toolCostUsd = 0;
+    if (toolContext.decision.kind !== 'skip') {
+      const apiKeyId = req.ctrlApiKey?.apiKey.id;
+      if (!apiKeyId) {
+        throw new ToolRuntimeCoordinatorError(
+          'invalid_api_key',
+          'The API key is no longer active.',
+          401,
+        );
+      }
+      const requireFreshApiAccess = () => (
+        requireApiKeyToolRuntimeAccess(getConfigStore(), apiKeyId)
+      );
+      const toolAbort = new AbortController();
+      const onToolClientGone = () => {
+        if (!res.writableFinished) toolAbort.abort();
+      };
+      res.on('close', onToolClientGone);
+      try {
+        const outcome = await executeChatToolRuntime({
+          requestId,
+          store: getConfigStore(),
+          config: toolConfig,
+          context: toolContext,
+          answerCatalogId: ctx.mini?.resolution.attempts[0]?.catalogId
+            ?? (ctx.requestedModel.startsWith('catalog/')
+              ? ctx.requestedModel.slice('catalog/'.length)
+              : null),
+          plannerCatalogId: () => plannerCatalogId,
+          signal: toolAbort.signal,
+          reauthorize: async () => {
+            await requireFreshApiAccess();
+            return true;
+          },
+          modelRound: async ({ pinned, toolRound, signal }) => {
+            await requireFreshApiAccess();
+            if (toolOrchestrator?.configured) {
+              if (toolOrchestrator.attempts.length === 0) {
+                throw new ToolRuntimeCoordinatorError(
+                  'tool_orchestrator_unavailable',
+                  'No configured tool orchestrator is currently available.',
+                  503,
+                );
+              }
+              const attempts = pinned
+                ? toolOrchestrator.attempts.filter((attempt) => (
+                    attempt.provider.id === pinned.providerId && attempt.modelId === pinned.model
+                  ))
+                : toolOrchestrator.attempts;
+              const result = await routeChat(
+                { ...(compressedReq as Record<string, unknown>), toolRound } as never,
+                {
+                  ...opts,
+                  onlyProviderId: pinned?.providerId ?? null,
+                  preferredChain: attempts.map((attempt) => attempt.provider),
+                  modelByProvider: Object.fromEntries(
+                    attempts.map((attempt) => [attempt.provider.id, attempt.modelId]),
+                  ),
+                  signal,
+                },
+              );
+              if (result.ok) {
+                plannerCatalogId = attempts.find((attempt) => (
+                  attempt.provider.id === result.providerId && attempt.modelId === result.model
+                ))?.catalogId ?? null;
+              }
+              return result;
+            }
+            if (ctx.mini) {
+              const attempts = pinned
+                ? ctx.mini.resolution.attempts.filter((attempt) => (
+                    attempt.provider.id === pinned.providerId && attempt.modelId === pinned.model
+                  ))
+                : ctx.mini.resolution.attempts;
+              return routeMiniChat(
+                { ...(compressedReq as Record<string, unknown>), toolRound } as never,
+                attempts,
+                { mode: ctx.mode, identity: identityResolved.identity, signal },
+              );
+            }
+            return routeChat(
+              { ...(compressedReq as Record<string, unknown>), toolRound } as never,
+              {
+                ...opts,
+                onlyProviderId: pinned?.providerId ?? null,
+                modelByProvider: pinned
+                  ? { [pinned.providerId]: pinned.model }
+                  : opts.modelByProvider,
+                signal,
+              },
+            );
+          },
+          onModelRound: async ({ round, result: roundResult, proposedCalls }) => {
+            const roundUsage = extractUsage(roundResult.body, guardedMessages);
+            const selected = ctx.mini && 'selectedAttempt' in roundResult
+              ? (roundResult as Awaited<ReturnType<typeof routeMiniChat>>).selectedAttempt
+              : null;
+            const roundPhase = toolOrchestrator?.configured || proposedCalls.length > 0
+              ? 'tool_planner'
+              : 'tool_synthesis';
+            toolCostUsd += await applyBilling(req, res, {
+              ...ctx,
+              providerId: roundResult.providerId,
+              routedModel: roundResult.model,
+              attempts: roundResult.attempts.length,
+              usage: roundUsage,
+              headersSent: true,
+              vision,
+              rtkStats,
+              guardReport: inputGuard,
+              requestId: `${requestId}:${roundPhase}:${round}`,
+              parentRequestId: requestId,
+              usagePhase: roundPhase,
+              toolRound: round,
+              miniRole: ctx.mini?.classification.role ?? null,
+              miniSlot: selected?.slot ?? null,
+              miniCatalogId: selected?.catalogId ?? null,
+            });
+          },
+        });
+        if (!outcome) {
+          throw new ToolRuntimeCoordinatorError('tool_runtime_unavailable', 'Tool runtime did not execute.');
+        }
+        let toolResult = outcome.result as V1ToolRouteResult;
+        if (toolOrchestrator?.configured) {
+          await requireFreshApiAccess();
+          const synthesisRequest = withToolSynthesisContext(
+            compressedReq as Record<string, unknown>,
+            outcome.context,
+          );
+          toolResult = ctx.mini
+            ? await routeMiniChat(synthesisRequest as never, ctx.mini.resolution.attempts, {
+                mode: ctx.mode,
+                identity: identityResolved.identity,
+                signal: toolAbort.signal,
+              })
+            : await routeChat(synthesisRequest as never, { ...opts, signal: toolAbort.signal });
+          const synthesisUsage = extractUsage(toolResult.body, synthesisRequest.messages);
+          const synthesisSelected = ctx.mini && 'selectedAttempt' in toolResult
+            ? (toolResult as Awaited<ReturnType<typeof routeMiniChat>>).selectedAttempt
+            : null;
+          toolCostUsd += await applyBilling(req, res, {
+            ...ctx,
+            providerId: toolResult.providerId,
+            routedModel: toolResult.model,
+            attempts: toolResult.attempts.length,
+            usage: synthesisUsage,
+            headersSent: true,
+            vision,
+            rtkStats,
+            guardReport: inputGuard,
+            requestId: `${requestId}:tool_synthesis:${outcome.rounds + 1}`,
+            parentRequestId: requestId,
+            usagePhase: 'tool_synthesis',
+            toolRound: outcome.rounds + 1,
+            miniRole: ctx.mini?.classification.role ?? null,
+            miniSlot: synthesisSelected?.slot ?? null,
+            miniCatalogId: synthesisSelected?.catalogId ?? null,
+          });
+        }
+        precomputedToolResult = toolResult;
+        toolUsageRecorded = true;
+        res.setHeader('X-CtrL-Mode', ctx.mode);
+        res.setHeader('X-Routed-Via', toolResult.providerId);
+        res.setHeader('X-Fallback-Attempts', String(toolResult.attempts.length));
+        if (ctx.meta) res.setHeader('X-Ctrl-Meta-Model', META_MODEL_ID);
+        if (vision) res.setHeader('X-Ctrl-Vision', '1');
+        setRtkHeaders(res, rtkStats, false);
+        setGuardrailHeaders(res, inputGuard, false);
+        const toolSelectedAttempt = ctx.mini && 'selectedAttempt' in toolResult
+          ? (toolResult as Awaited<ReturnType<typeof routeMiniChat>>).selectedAttempt
+          : null;
+        if (toolSelectedAttempt) {
+          res.setHeader('X-Helmora-Mini-Role', ctx.mini!.classification.role);
+          res.setHeader('X-Helmora-Mini-Slot', toolSelectedAttempt.slot);
+        }
+        const apiKey = req.ctrlApiKey?.apiKey;
+        if (apiKey) {
+          const refreshed = await getConfigStore().getApiKeyById(apiKey.id);
+          if (refreshed) {
+            res.setHeader('X-Ctrl-Key-Env', refreshed.keyEnv);
+            res.setHeader('X-Ctrl-Cost', toolCostUsd.toFixed(8));
+            res.setHeader('X-Ctrl-Spent', refreshed.spentUsd.toFixed(8));
+            if (refreshed.budgetUsd != null) {
+              res.setHeader('X-Ctrl-Budget', String(refreshed.budgetUsd));
+            }
+          }
+        }
+        if (body.stream) {
+          if (!toolResult.ok) {
+            res.status(toolResult.status).json(toolResult.body);
+            return;
+          }
+          const rawContent = (toolResult.body as {
+            choices?: Array<{ message?: { content?: unknown } }>;
+          })?.choices?.[0]?.message?.content;
+          const content = typeof rawContent === 'string' ? guardOutputText(rawContent).text : '';
+          res.status(200);
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('X-Accel-Buffering', 'no');
+          if (typeof res.flushHeaders === 'function') res.flushHeaders();
+          res.write(': helmora tool runtime complete\n\n');
+          if (content) {
+            res.write(`data: ${JSON.stringify({
+              choices: [{ index: 0, delta: { content }, finish_reason: null }],
+            })}\n\n`);
+          }
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+      } catch (error) {
+        if (error instanceof ToolRuntimeCoordinatorError && !res.headersSent) {
+          res.status(error.status).json({
+            error: { type: error.code, message: error.message, requestId },
+          });
+          return;
+        }
+        throw error;
+      } finally {
+        res.off('close', onToolClientGone);
+      }
+    }
+
     if (body.stream) {
       await writeSse(
         req,
@@ -369,13 +630,13 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       | Awaited<ReturnType<typeof routeChat>>
       | Awaited<ReturnType<typeof routeMiniChat>>;
     try {
-      result = ctx.mini
+      result = precomputedToolResult ?? (ctx.mini
         ? await routeMiniChat(compressedReq, ctx.mini.resolution.attempts, {
             mode: ctx.mode,
             identity: identityResolved.identity,
             signal: ac.signal,
           })
-        : await routeChat(compressedReq, { ...opts, signal: ac.signal });
+        : await routeChat(compressedReq, { ...opts, signal: ac.signal }));
     } finally {
       res.off('close', onClientGone);
     }
@@ -397,7 +658,7 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       res.setHeader('X-Helmora-Mini-Slot', miniSelectedAttempt.slot);
     }
 
-    await applyBilling(req, res, {
+    if (!toolUsageRecorded) await applyBilling(req, res, {
       ...ctx,
       providerId: result.providerId,
       routedModel: result.model,
@@ -411,6 +672,7 @@ v1Router.post('/chat/completions', async (req, res, next) => {
       miniSlot: miniSelectedAttempt?.slot ?? null,
       miniCatalogId: miniSelectedAttempt?.catalogId ?? null,
     });
+    if (toolUsageRecorded) setGuardrailHeaders(res, guardReport, false);
 
     if (!result.ok) {
       res.status(result.status >= 400 ? result.status : 502).json(
@@ -787,12 +1049,16 @@ async function applyBilling(
     guardReport?: GuardrailReport | null;
     status?: UsageEventStatus;
     requestId?: string;
+    parentRequestId?: string | null;
+    toolRunId?: string | null;
+    usagePhase?: import('../keys/types.js').UsageEvent['usagePhase'];
+    toolRound?: number | null;
     estimated?: boolean;
     miniRole?: import('../keys/types.js').UsageEvent['miniRole'];
     miniSlot?: import('../keys/types.js').UsageEvent['miniSlot'];
     miniCatalogId?: string | null;
   }
-): Promise<void> {
+): Promise<number> {
   const providers = await listProviders();
   const provider = providers.find((p) => p.id === args.providerId);
   const underlying = [
@@ -828,6 +1094,8 @@ async function applyBilling(
     await store.addApiKeySpend(apiKey.id, costUsd);
     await store.recordUsage({
       requestId,
+      parentRequestId: args.parentRequestId ?? null,
+      toolRunId: args.toolRunId ?? null,
       source: 'api',
       apiKeyId: apiKey.id,
       status: args.status ?? 'complete',
@@ -840,6 +1108,8 @@ async function applyBilling(
       miniRole: args.miniRole ?? null,
       miniSlot: args.miniSlot ?? null,
       miniCatalogId: args.miniCatalogId ?? null,
+      usagePhase: args.usagePhase ?? 'answer',
+      toolRound: args.toolRound ?? null,
       costMicrosUsd,
       promptTokens: args.usage.prompt_tokens ?? null,
       completionTokens: args.usage.completion_tokens ?? null,
@@ -867,6 +1137,7 @@ async function applyBilling(
     setRtkHeaders(res, args.rtkStats ?? null, false);
     setGuardrailHeaders(res, args.guardReport ?? null, false);
   }
+  return costUsd;
 }
 
 function extractUsage(

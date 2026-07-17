@@ -14,6 +14,8 @@ import {
 } from '../services/tool-config.js';
 import { getTinyFishToolExecutor } from '../services/tool-executor-manager.js';
 import { TinyFishConnectorError } from '../tools/connectors/tinyfish-client.js';
+import { nativeToolCapabilityFor } from '../providers/native-tools.js';
+import { resolveToolOrchestratorAttempts } from '../services/tool-orchestrator-route.js';
 
 export const toolsRouter = Router();
 
@@ -35,17 +37,24 @@ function orchestratorSummary(
   const provider = providersById.get(model.providerId);
   if (!provider) return { catalogId, model: null, status: 'provider_missing' as const };
   const needsCredentials = providerNeedsCredentials(provider);
+  const toolsSupported = Boolean(
+    nativeToolCapabilityFor(provider)
+    && (model.capabilities == null || model.capabilities.includes('tools'))
+  );
   const routable = Boolean(
     model.enabled
     && provider.enabled
     && provider.verifyStatus === 'ok'
     && provider.catalogReady
     && !needsCredentials
+    && toolsSupported
   );
   const status = !model.enabled || !provider.enabled
     ? 'disabled'
     : needsCredentials
       ? 'credentials_required'
+      : !toolsSupported
+        ? 'tools_unsupported'
       : routable
         ? 'ready'
         : 'degraded';
@@ -72,6 +81,11 @@ async function toolsAdminResponse(config: ToolRuntimeConfig) {
   ]);
   const catalogById = new Map(catalog.models.map((model) => [model.id, model]));
   const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  const orchestratorResolution = resolveToolOrchestratorAttempts(
+    config,
+    catalog.models,
+    providers,
+  );
   const warnings: ToolConfigValidationError[] = [];
   for (const slot of ['primaryCatalogId', 'fallbackCatalogId'] as const) {
     const summary = orchestratorSummary(config.orchestrator[slot], catalogById, providersById);
@@ -96,6 +110,18 @@ async function toolsAdminResponse(config: ToolRuntimeConfig) {
     : credential.credentialConfigured
       ? 'ready'
       : 'credentials_required';
+  const hasEligibleTools = config.toolOverrides.some(
+    (override) => override.enabled && Object.values(override.scopes).some(Boolean),
+  );
+  const blockingReasons: string[] = [];
+  if (!config.enabled) blockingReasons.push('runtime_disabled');
+  if (!config.connectors.tinyfish.enabled) blockingReasons.push('connector_disabled');
+  else if (!credential.credentialConfigured) blockingReasons.push('credentials_required');
+  if (!hasEligibleTools) blockingReasons.push('no_eligible_tools');
+  if (orchestratorResolution.configured && orchestratorResolution.attempts.length === 0) {
+    blockingReasons.push('tool_orchestrator_unavailable');
+  }
+  const executable = blockingReasons.length === 0;
 
   return {
     product: { id: 'helmora-tools', displayName: 'Tools' },
@@ -125,6 +151,11 @@ async function toolsAdminResponse(config: ToolRuntimeConfig) {
         status: connectorStatus,
         profile: 'TinyFish Search + Fetch Free',
       },
+    },
+    runtime: {
+      status: executable ? 'ready' : config.enabled ? 'blocked' : 'disabled',
+      executable,
+      blockingReasons,
     },
     controlHealth: getControlHealth(),
     warnings,

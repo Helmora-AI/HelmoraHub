@@ -3,7 +3,8 @@ import type { RegisteredTool } from '../tools/types.js';
 import type { ModelToolResult } from '../tools/untrusted-context.js';
 import type { ProviderToggle } from '../types.js';
 
-export type NativeToolAdapter = 'openai_chat' | 'openai_responses';
+export type NativeToolAdapter = 'openai_chat' | 'openai_responses' | 'anthropic' | 'gemini';
+export type ToolWireProtocol = NativeToolAdapter;
 
 export type NativeToolCapability = {
   adapter: NativeToolAdapter;
@@ -13,6 +14,7 @@ export type NativeToolCapability = {
 
 export type ProviderToolRound = {
   definitions: readonly RegisteredTool[];
+  round?: number;
   calls?: readonly ProposedToolCall[];
   results?: readonly ModelToolResult[];
 };
@@ -34,6 +36,8 @@ export function nativeToolCapabilityFor(
   if (provider.id === 'codex' && provider.protocol === 'oauth' && provider.authMode === 'oauth') {
     return { adapter: 'openai_responses', streaming: false };
   }
+  if (provider.protocol === 'anthropic') return { adapter: 'anthropic', streaming: false };
+  if (provider.protocol === 'gemini') return { adapter: 'gemini', streaming: false };
   if (provider.protocol === 'openai' || provider.protocol === 'keyless' || provider.protocol === 'custom') {
     return { adapter: 'openai_chat', streaming: false };
   }
@@ -44,7 +48,7 @@ export function nativeToolCapabilityFor(
 }
 
 export function parseToolArguments(input: {
-  protocol: 'openai_chat' | 'openai_responses';
+  protocol: ToolWireProtocol;
   value: unknown;
 }): Record<string, unknown> {
   const code = `${input.protocol}_invalid_tool_arguments`;
@@ -64,7 +68,7 @@ export function parseToolArguments(input: {
 }
 
 export function assertKnownTool(input: {
-  protocol: 'openai_chat' | 'openai_responses';
+  protocol: ToolWireProtocol;
   name: unknown;
   definitions: readonly RegisteredTool[];
 }): RegisteredTool['id'] {
@@ -79,7 +83,7 @@ export function assertKnownTool(input: {
 }
 
 export function assertCallId(input: {
-  protocol: 'openai_chat' | 'openai_responses';
+  protocol: ToolWireProtocol;
   value: unknown;
   seen?: Set<string>;
 }): string {
@@ -105,7 +109,7 @@ export function serializeModelToolResult(result: ModelToolResult): string {
 }
 
 export function pairToolResults(
-  protocol: 'openai_chat' | 'openai_responses',
+  protocol: ToolWireProtocol,
   calls: readonly ProposedToolCall[],
   results: readonly ModelToolResult[],
 ): Array<{ call: ProposedToolCall; result: ModelToolResult }> {

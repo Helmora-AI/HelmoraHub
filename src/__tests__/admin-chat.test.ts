@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +9,11 @@ import { createApp } from '../app.js';
 import type { Express } from 'express';
 import { normalizeMiniRoleConfig, setMiniRoleConfig } from '../services/mini-route.js';
 import { adminChatStatusForUpstreamFailure } from '../routes/chat.js';
+import {
+  DEFAULT_TOOL_RUNTIME_CONFIG,
+  getToolRuntimeConfig,
+  setToolRuntimeConfig,
+} from '../services/tool-config.js';
 
 let app: Express;
 let tmpDir: string;
@@ -108,6 +113,38 @@ describe('POST /api/chat/completions', () => {
       });
     expect(res.status).toBe(400);
     expect(res.body.error.type).toBe('invalid_tools_policy');
+  });
+
+  it('reports a forced but disabled tool runtime before resolving the chat model', async () => {
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .set('X-Helmora-Tools', 'force')
+      .send({
+        model: 'catalog/missing-model',
+        messages: [{ role: 'user', content: 'Use tools for the current gold price.' }],
+        stream: false,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.type).toBe('runtime_disabled');
+    expect(res.body.error.message).toContain('Settings > Tools');
+  });
+
+  it('uses the same forced-runtime preflight on the public API', async () => {
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${v1Key}`)
+      .set('X-Helmora-Tools', 'force')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Use tools for the current gold price.' }],
+        stream: false,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.type).toBe('runtime_disabled');
+    expect(res.body.error.message).toContain('Settings > Tools');
   });
 
   it('rejects /v1 consumer key', async () => {
@@ -249,5 +286,319 @@ describe('POST /api/chat/completions', () => {
     );
     expect(hit).toBeTruthy();
     expect(hit!.model).not.toMatch(/^catalog\//);
+  });
+
+  it('executes TinyFish through the native tool loop for the default Vietnamese auto request', async () => {
+    const toolConfig = structuredClone(DEFAULT_TOOL_RUNTIME_CONFIG);
+    toolConfig.enabled = true;
+    toolConfig.connectors.tinyfish.enabled = true;
+    await setToolRuntimeConfig(toolConfig);
+    await getConfigStore().updateConnectorCredential('tinyfish', { secret: 'tinyfish-test-key' });
+    await getConfigStore().updateProvider('paid-upstream', {
+      baseUrl: 'https://model.test/v1',
+      apiKey: 'model-test-key',
+      capabilities: ['tools'],
+      verifyStatus: 'ok',
+    });
+
+    let modelRounds = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        expect(url.searchParams.get('query')).toBe('giá vàng hôm nay');
+        return new Response(JSON.stringify({
+          query: 'giá vàng hôm nay',
+          results: [{
+            title: 'Giá vàng',
+            snippet: 'Giá vàng cập nhật hôm nay',
+            url: 'https://example.com/gold',
+          }],
+        }));
+      }
+      expect(url.href).toBe('https://model.test/v1/chat/completions');
+      const upstream = JSON.parse(String(init?.body)) as {
+        tools?: unknown[];
+        messages: Array<{ role: string }>;
+      };
+      modelRounds += 1;
+      expect(upstream.tools).toHaveLength(2);
+      if (!upstream.messages.some((message) => message.role === 'tool')) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call_gold',
+                type: 'function',
+                function: {
+                  name: 'web_search',
+                  arguments: JSON.stringify({ query: 'giá vàng hôm nay' }),
+                },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 8, completion_tokens: 3 },
+        }));
+      }
+      return new Response(JSON.stringify({
+        choices: [{
+          message: { role: 'assistant', content: 'Giá vàng hôm nay đã được tra cứu.' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 8 },
+      }));
+    });
+
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .set('X-Helmora-Tools', 'auto')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Hãy dùng tools để tra giá vàng hôm nay' }],
+        stream: false,
+      });
+    fetchMock.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(res.body.choices[0].message.content).toContain('đã được tra cứu');
+    expect(modelRounds).toBe(2);
+    expect(await getConfigStore().listToolRuns({ limit: 10 })).toContainEqual(
+      expect.objectContaining({
+        requestId: expect.stringMatching(/^req_/),
+        source: 'runtime',
+        toolId: 'web_search',
+        status: 'completed',
+        sourceCount: 1,
+      }),
+    );
+    const usage = await getConfigStore().listUsage({ limit: 20 });
+    expect(usage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ usagePhase: 'tool_planner', toolRound: 0 }),
+      expect.objectContaining({ usagePhase: 'tool_synthesis', toolRound: 1 }),
+    ]));
+  });
+
+  it('uses the configured catalog orchestrator for every round and audits its catalog id', async () => {
+    const toolConfig = await getToolRuntimeConfig();
+    toolConfig.orchestrator.primaryCatalogId = catalogId;
+    await setToolRuntimeConfig(toolConfig);
+
+    const models: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        return new Response(JSON.stringify({
+          query: 'gold today',
+          results: [{ title: 'Gold', snippet: 'Updated', url: 'https://example.com/gold' }],
+        }));
+      }
+      const upstream = JSON.parse(String(init?.body)) as {
+        model: string;
+        messages: Array<{ role: string; content?: string }>;
+      };
+      models.push(upstream.model);
+      if (upstream.model === 'demo/chat-coding') {
+        expect(upstream.messages.some((message) => (
+          message.role === 'system' && message.content?.includes('untrusted external tool output')
+        ))).toBe(true);
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'Answer model synthesis.' } }],
+        }));
+      }
+      return new Response(JSON.stringify(upstream.messages.some((message) => message.role === 'tool')
+        ? { choices: [{ message: { role: 'assistant', content: 'Planner complete.' } }] }
+        : { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+            id: 'call_orchestrated',
+            type: 'function',
+            function: { name: 'web_search', arguments: '{"query":"gold today"}' },
+          }] } }] }));
+    });
+
+    try {
+      const res = await request(app)
+        .post('/api/chat/completions')
+        .set('Authorization', `Bearer ${spaToken}`)
+        .set('X-Helmora-Tools', 'force')
+        .send({
+          model: `catalog/${codingCatalogId}`,
+          messages: [{ role: 'user', content: 'Use tools for the current gold price.' }],
+          stream: false,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.choices[0].message.content).toBe('Answer model synthesis.');
+      expect(models).toEqual(['demo/chat-test', 'demo/chat-test', 'demo/chat-coding']);
+      expect(await getConfigStore().listToolRuns({ limit: 10 })).toContainEqual(
+        expect.objectContaining({ plannerCatalogId: catalogId, status: 'completed' }),
+      );
+    } finally {
+      fetchMock.mockRestore();
+      toolConfig.orchestrator.primaryCatalogId = null;
+      await setToolRuntimeConfig(toolConfig);
+    }
+  });
+
+  it('keeps the Playground SSE contract and emits redacted tool activity', async () => {
+    let modelRounds = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        return new Response(JSON.stringify({
+          query: 'giá vàng hôm nay',
+          results: [{ title: 'Gold', snippet: 'Current', url: 'https://example.com/gold' }],
+        }));
+      }
+      const upstream = JSON.parse(String(init?.body)) as { messages: Array<{ role: string }> };
+      modelRounds += 1;
+      return new Response(JSON.stringify(upstream.messages.some((message) => message.role === 'tool')
+        ? {
+            choices: [{ message: { role: 'assistant', content: 'Kết quả SSE từ TinyFish.' } }],
+            usage: { prompt_tokens: 20, completion_tokens: 6 },
+          }
+        : {
+            choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+              id: 'call_stream',
+              type: 'function',
+              function: { name: 'web_search', arguments: '{"query":"giá vàng hôm nay"}' },
+            }] } }],
+            usage: { prompt_tokens: 7, completion_tokens: 2 },
+          }));
+    });
+
+    const res = await request(app)
+      .post('/api/chat/completions')
+      .set('Authorization', `Bearer ${spaToken}`)
+      .set('X-Helmora-Tools', 'force')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Tra giá vàng hôm nay' }],
+        stream: true,
+      });
+    fetchMock.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(String(res.headers['content-type'])).toContain('text/event-stream');
+    const responseText = typeof res.text === 'string'
+      ? res.text
+      : Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
+    expect(responseText).toContain('event: tool_activity');
+    expect(responseText).toContain('"toolId":"web_search"');
+    expect(responseText).toContain('Kết quả SSE từ TinyFish.');
+    expect(responseText).toContain('[DONE]');
+    expect(responseText).not.toContain('giá vàng hôm nay');
+    expect(modelRounds).toBe(2);
+  });
+
+  it('uses the same TinyFish runtime contract on /v1 without exposing tool arguments', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        return new Response(JSON.stringify({
+          query: 'current gold price',
+          results: [{ title: 'Gold', snippet: 'Updated', url: 'https://example.com/gold' }],
+        }));
+      }
+      const upstream = JSON.parse(String(init?.body)) as { messages: Array<{ role: string }> };
+      return new Response(JSON.stringify(upstream.messages.some((message) => message.role === 'tool')
+        ? {
+            choices: [{ message: { role: 'assistant', content: 'Public API tool answer.' } }],
+            usage: { prompt_tokens: 18, completion_tokens: 5 },
+          }
+        : {
+            choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+              id: 'call_v1',
+              type: 'function',
+              function: { name: 'web_search', arguments: '{"query":"current gold price"}' },
+            }] } }],
+            usage: { prompt_tokens: 6, completion_tokens: 2 },
+          }));
+    });
+
+    const res = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', `Bearer ${v1Key}`)
+      .set('X-Helmora-Tools', 'force')
+      .send({
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Tra giá vàng hôm nay' }],
+        stream: false,
+      });
+    fetchMock.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(res.body.choices[0].message.content).toBe('Public API tool answer.');
+    const apiUsage = (await getConfigStore().listUsage({ limit: 30 }))
+      .filter((event) => event.source === 'api');
+    expect(apiUsage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ usagePhase: 'tool_planner', parentRequestId: expect.any(String) }),
+      expect.objectContaining({ usagePhase: 'tool_synthesis', parentRequestId: expect.any(String) }),
+    ]));
+  });
+
+  it('keeps the configured orchestrator separate from the /v1 answer model', async () => {
+    const toolConfig = await getToolRuntimeConfig();
+    toolConfig.orchestrator.primaryCatalogId = codingCatalogId;
+    await setToolRuntimeConfig(toolConfig);
+
+    const models: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        return new Response(JSON.stringify({
+          query: 'current gold price',
+          results: [{ title: 'Gold', snippet: 'Updated', url: 'https://example.com/gold' }],
+        }));
+      }
+      const upstream = JSON.parse(String(init?.body)) as {
+        model: string;
+        messages: Array<{ role: string; content?: string }>;
+      };
+      models.push(upstream.model);
+      if (upstream.model === 'demo/chat-test') {
+        expect(upstream.messages.some((message) => (
+          message.role === 'system' && message.content?.includes('untrusted external tool output')
+        ))).toBe(true);
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'Public answer-model synthesis.' } }],
+          usage: { prompt_tokens: 24, completion_tokens: 5 },
+        }));
+      }
+      return new Response(JSON.stringify(upstream.messages.some((message) => message.role === 'tool')
+        ? {
+            choices: [{ message: { role: 'assistant', content: 'Planner complete.' } }],
+            usage: { prompt_tokens: 18, completion_tokens: 2 },
+          }
+        : {
+            choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+              id: 'call_v1_orchestrated',
+              type: 'function',
+              function: { name: 'web_search', arguments: '{"query":"current gold price"}' },
+            }] } }],
+            usage: { prompt_tokens: 7, completion_tokens: 2 },
+          }));
+    });
+
+    try {
+      const res = await request(app)
+        .post('/v1/chat/completions')
+        .set('Authorization', `Bearer ${v1Key}`)
+        .set('X-Helmora-Tools', 'force')
+        .send({
+          model: 'auto',
+          messages: [{ role: 'user', content: 'Use tools for the current gold price.' }],
+          stream: false,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.choices[0].message.content).toBe('Public answer-model synthesis.');
+      expect(models).toEqual(['demo/chat-coding', 'demo/chat-coding', 'demo/chat-test']);
+    } finally {
+      fetchMock.mockRestore();
+      toolConfig.orchestrator.primaryCatalogId = null;
+      await setToolRuntimeConfig(toolConfig);
+    }
   });
 });

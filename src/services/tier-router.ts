@@ -19,6 +19,7 @@ import {
   type IdentitySurface,
 } from './identity-context.js';
 import type { MiniCatalogAttempt } from './mini-route.js';
+import { nativeToolCapabilityFor } from '../providers/native-tools.js';
 
 export interface RouteChatIdentityOptions {
   enabled: boolean;
@@ -174,6 +175,23 @@ export async function routeMiniChat(
   const attempts: MiniRouteAttemptRecord[] = [];
 
   for (const attempt of catalogAttempts) {
+    if (request.toolRound && (
+      !attempt.provider.baseUrl
+      || !nativeToolCapabilityFor(attempt.provider)
+      || (attempt.modelCapabilities != null && !attempt.modelCapabilities.includes('tools'))
+    )) {
+      attempts.push({
+        role: attempt.role,
+        slot: attempt.slot,
+        catalogId: attempt.catalogId,
+        providerId: attempt.provider.id,
+        modelId: attempt.modelId,
+        status: 503,
+        error: 'native_tool_calling_unsupported',
+        retry: { retryable: true, reason: 'unsupported_request', healthEffect: 'none' },
+      });
+      continue;
+    }
     if (await rate.isCoolingDown(attempt.provider.id)) {
       attempts.push({
         role: attempt.role,
@@ -522,6 +540,14 @@ export async function routeChat(
   }
 
   for (const provider of chain) {
+    if (request.toolRound && (!provider.baseUrl || !nativeToolCapabilityFor(provider))) {
+      attempts.push({
+        providerId: provider.id,
+        status: 503,
+        error: 'native_tool_calling_unsupported',
+      });
+      continue;
+    }
     if (await rate.isCoolingDown(provider.id)) {
       attempts.push({
         providerId: provider.id,

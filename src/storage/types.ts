@@ -4,6 +4,7 @@ import type {
   ApiKeyRecord,
   CreateApiKeyInput,
   UsageEvent,
+  UsageEventCreate,
 } from '../keys/types.js';
 import type { ModelPricing } from '../keys/types.js';
 import type {
@@ -141,7 +142,7 @@ export interface ConfigStore extends ChatStoreMethods {
   addApiKeySpend(id: string, costUsd: number): Promise<ApiKeyRecord | null>;
   touchApiKey(id: string): Promise<void>;
 
-  recordUsage(event: Omit<UsageEvent, 'id' | 'createdAt'> & { id?: string }): Promise<UsageEvent>;
+  recordUsage(event: UsageEventCreate): Promise<UsageEvent>;
   listUsage(opts?: { apiKeyId?: string; limit?: number }): Promise<UsageEvent[]>;
   recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord>;
   listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]>;

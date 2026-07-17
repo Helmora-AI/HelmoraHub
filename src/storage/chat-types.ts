@@ -4,6 +4,7 @@ export const CHAT_MAX_SESSIONS = 30;
 export const CHAT_MAX_MESSAGES_PER_SESSION = 200;
 /** Soft cap per message body (chars) to keep API/memory bounded. */
 export const CHAT_MAX_CONTENT_CHARS = 200_000;
+export const CHAT_MAX_TOOL_ACTIVITIES = 20;
 export const CHAT_ACTIVE_SETTING_KEY = 'playground_active_session_id';
 
 export class ChatSessionNotFoundError extends Error {
@@ -22,12 +23,44 @@ export type StoredChatModelSelection =
 
 export type StoredChatMessageStatus = 'streaming' | 'complete' | 'stopped' | 'error';
 
+export type StoredChatToolActivity = {
+  toolId: 'web_search' | 'web_fetch';
+  status: 'completed' | 'failed';
+  sourceCount: number;
+  errorCode: string | null;
+};
+
+export function normalizeChatToolActivities(input: unknown): StoredChatToolActivity[] {
+  if (!Array.isArray(input)) return [];
+  const activities: StoredChatToolActivity[] = [];
+  for (const raw of input.slice(0, CHAT_MAX_TOOL_ACTIVITIES)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const value = raw as Record<string, unknown>;
+    if (value.toolId !== 'web_search' && value.toolId !== 'web_fetch') continue;
+    if (value.status !== 'completed' && value.status !== 'failed') continue;
+    if (!Number.isInteger(value.sourceCount)) continue;
+    const sourceCount = Number(value.sourceCount);
+    if (sourceCount < 0 || sourceCount > 10_000) continue;
+    if (value.errorCode !== null && typeof value.errorCode !== 'string') continue;
+    activities.push({
+      toolId: value.toolId,
+      status: value.status,
+      sourceCount,
+      errorCode: typeof value.errorCode === 'string'
+        ? value.errorCode.slice(0, 120)
+        : null,
+    });
+  }
+  return activities;
+}
+
 export type StoredChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   status?: StoredChatMessageStatus;
   errorCode?: string;
+  toolActivities?: StoredChatToolActivity[];
   createdAt: string;
   /** Monotonic order within a session (1-based). */
   seq: number;
@@ -78,6 +111,7 @@ export type AppendChatMessageInput = {
   content: string;
   status?: StoredChatMessageStatus;
   errorCode?: string;
+  toolActivities?: StoredChatToolActivity[];
   createdAt?: string;
 };
 

@@ -98,6 +98,7 @@ export type MiniCatalogAttempt = {
   catalogId: string;
   provider: ProviderToggle;
   modelId: string;
+  modelCapabilities: string[] | null;
   inheritedFromGeneral: boolean;
 };
 
@@ -386,6 +387,7 @@ export function resolveMiniCatalogAttempts(
       catalogId: effective.catalogId,
       provider,
       modelId: model.modelId,
+      modelCapabilities: model.capabilities,
       inheritedFromGeneral: effective.inheritedFromGeneral,
     });
   }

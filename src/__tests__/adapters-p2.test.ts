@@ -201,13 +201,20 @@ describe('P2 adapters', () => {
     );
   });
 
-  it('requires explicit provider capability and a supported adapter protocol', () => {
+  it('requires explicit provider capability and selects the matching supported adapter', () => {
     expect(nativeToolCapabilityFor(provider({ capabilities: [] }))).toBeNull();
     expect(nativeToolCapabilityFor(provider({ defaultModel: 'definitely-tools-capable' }))).toEqual({
       adapter: 'openai_chat',
       streaming: false,
     });
-    expect(nativeToolCapabilityFor(provider({ protocol: 'anthropic' }))).toBeNull();
+    expect(nativeToolCapabilityFor(provider({ protocol: 'anthropic' }))).toEqual({
+      adapter: 'anthropic',
+      streaming: false,
+    });
+    expect(nativeToolCapabilityFor(provider({ protocol: 'gemini' }))).toEqual({
+      adapter: 'gemini',
+      streaming: false,
+    });
     expect(nativeToolCapabilityFor(provider({
       id: 'codex',
       protocol: 'oauth',

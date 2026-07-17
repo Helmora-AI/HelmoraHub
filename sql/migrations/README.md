@@ -44,6 +44,12 @@ Resolve each duplicate using application context and a backup, then rerun `005`.
 Only `service_role` receives execute permission on the atomic RPC functions.
 Applying this migration is an operator action; Hub never applies it automatically.
 
+To persist redacted TinyFish activity with Playground assistant messages, run
+[`006_chat_tool_activities.sql`](./006_chat_tool_activities.sql) after `005`.
+It adds one bounded `tool_activities` JSONB column, updates both atomic RPCs,
+and stores only tool id, completion state, source count, and normalized error
+code. It never stores search queries, source URLs, snippets, or raw results.
+
 **Hybrid note:** Playground chat history is stored in Hub **local SQLite workspace** (same as usage events), not in browser `localStorage`. The Supabase chat tables keep schema parity with `SupabaseConfigStore`; hybrid mode does not require `002` for Playground to work after upgrading Hub.
 
 ## Versioned copies (optional)

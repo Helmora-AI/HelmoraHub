@@ -53,10 +53,15 @@ export type CreateApiKeyInput = {
 
 export type UsageEventStatus = 'complete' | 'stopped' | 'error';
 export type UsageEventSource = 'api' | 'admin_chat';
+export type UsageEventPhase = 'answer' | 'tool_planner' | 'tool_synthesis';
 
 export type UsageEvent = {
   id: string;
   requestId: string;
+  /** Root chat request shared by planner/tool/final-answer usage rows. */
+  parentRequestId: string | null;
+  /** Optional safe audit id linking usage to a bounded tool run. */
+  toolRunId: string | null;
   source: UsageEventSource;
   /** null for admin_chat — never a sentinel key id */
   apiKeyId: string | null;
@@ -67,12 +72,25 @@ export type UsageEvent = {
   miniRole: 'general' | 'reasoning' | 'coding' | 'research' | 'creative' | 'review' | null;
   miniSlot: 'primary' | 'fallback' | null;
   miniCatalogId: string | null;
+  usagePhase: UsageEventPhase;
+  toolRound: number | null;
   /** Integer micros of USD (1e-6). Source of truth for cost. */
   costMicrosUsd: number;
   promptTokens: number | null;
   completionTokens: number | null;
   estimated: boolean;
   createdAt: number;
+};
+
+export type UsageEventCreate = Omit<
+  UsageEvent,
+  'id' | 'createdAt' | 'parentRequestId' | 'toolRunId' | 'usagePhase' | 'toolRound'
+> & {
+  id?: string;
+  parentRequestId?: string | null;
+  toolRunId?: string | null;
+  usagePhase?: UsageEventPhase;
+  toolRound?: number | null;
 };
 
 /** Display helper — float USD from micros. */

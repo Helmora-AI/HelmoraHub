@@ -13,6 +13,18 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('TinyFish Search connector', () => {
+  it('accepts the published TinyFish recency and purpose bounds', () => {
+    expect(validateWebSearchInput({
+      query: 'release history',
+      recencyMinutes: 5_256_000,
+      purpose: 'x'.repeat(2_000),
+    })).toMatchObject({ recencyMinutes: 5_256_000 });
+
+    expect(() => validateWebSearchInput({
+      query: 'release history',
+      recencyMinutes: 5_256_001,
+    })).toThrowError(expect.objectContaining({ code: 'tool_invalid_arguments' }));
+  });
   it('emits only the canonical endpoint, allowlisted parameters, and server API key', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({
       query: 'latest TypeScript release',

@@ -7,6 +7,7 @@ import {
   CHAT_MAX_MESSAGES_PER_SESSION,
   CHAT_MAX_SESSIONS,
   ChatSessionNotFoundError,
+  normalizeChatToolActivities,
   type AppendChatMessageInput,
   type CreateChatSessionInput,
   type ImportChatStoreInput,
@@ -42,6 +43,7 @@ type MessageRow = {
   content: string;
   status: string | null;
   error_code: string | null;
+  tool_activities: unknown;
   created_at: string;
   seq: number;
 };
@@ -89,6 +91,7 @@ function mapMessage(row: MessageRow): StoredChatMessage {
     content: row.content,
     status: status || undefined,
     errorCode: row.error_code || undefined,
+    toolActivities: normalizeChatToolActivities(row.tool_activities),
     createdAt: row.created_at,
     seq: row.seq,
   };
@@ -102,6 +105,7 @@ function messageRpcPayload(messages: AppendChatMessageInput[]) {
     content: clampContent(message.content ?? ''),
     status: message.status ?? null,
     errorCode: message.errorCode ?? null,
+    toolActivities: normalizeChatToolActivities(message.toolActivities),
     createdAt: message.createdAt || now,
   }));
 }

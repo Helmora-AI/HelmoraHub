@@ -111,12 +111,28 @@ describe('Playground chat history API', () => {
       .send({
         messages: [
           { role: 'user', content: 'hi', status: 'complete' },
-          { role: 'assistant', content: 'hello', status: 'complete' },
+          {
+            role: 'assistant',
+            content: 'hello',
+            status: 'complete',
+            toolActivities: [{
+              toolId: 'web_search',
+              status: 'completed',
+              sourceCount: 2,
+              errorCode: null,
+            }],
+          },
         ],
       });
     expect(append.status).toBe(201);
     expect(append.body.messages).toHaveLength(2);
     expect(append.body.messages[0].seq).toBe(1);
+    expect(append.body.messages[1].toolActivities).toEqual([{
+      toolId: 'web_search',
+      status: 'completed',
+      sourceCount: 2,
+      errorCode: null,
+    }]);
 
     const page = await request(app)
       .get(`/api/chat/sessions/${id}/messages?limit=1`)
@@ -124,6 +140,7 @@ describe('Playground chat history API', () => {
     expect(page.status).toBe(200);
     expect(page.body.messages).toHaveLength(1);
     expect(page.body.hasMore).toBe(true);
+    expect(page.body.messages[0].toolActivities).toHaveLength(1);
 
     await request(app)
       .delete(`/api/chat/sessions/${id}`)
