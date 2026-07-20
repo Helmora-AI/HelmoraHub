@@ -99,6 +99,7 @@ export async function runToolRuntimeCoordinator<T extends ToolModelResult>(input
             : undefined;
           const toolRound: ProviderToolRound = {
             definitions: input.eligibleTools,
+            required: Boolean(input.requireToolCall && state.totalCalls === 0),
             round: state.round,
             ...(pendingCalls ? { calls: pendingCalls, results } : {}),
           };

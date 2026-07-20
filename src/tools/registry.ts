@@ -18,7 +18,7 @@ export const REGISTERED_TOOLS: readonly RegisteredTool[] = deepFreeze([
   {
     id: 'web_search',
     title: 'Search web',
-    description: 'Search the public web for current sources and evidence.',
+    description: 'Search the public web for current facts and evidence. Use locale and freshness filters for time-sensitive claims; prefer recent authoritative sources.',
     connectorId: 'tinyfish',
     risk: 'read',
     inputSchema: {
@@ -26,15 +26,15 @@ export const REGISTERED_TOOLS: readonly RegisteredTool[] = deepFreeze([
       additionalProperties: false,
       required: ['query'],
       properties: {
-        query: { type: 'string', minLength: 1, maxLength: 2_000 },
-        location: { type: 'string', minLength: 1, maxLength: 200 },
-        language: { type: 'string', minLength: 2, maxLength: 35 },
+        query: { type: 'string', minLength: 1, maxLength: 2_000, description: 'Focused search query.' },
+        location: { type: 'string', minLength: 2, maxLength: 2, pattern: '^[A-Za-z]{2}$', description: 'ISO 3166-1 alpha-2 country code, for example VN or US.' },
+        language: { type: 'string', minLength: 2, maxLength: 35, description: 'BCP 47 result language, for example vi or en.' },
         page: { type: 'integer', minimum: 0, maximum: 10 },
-        recencyMinutes: { type: 'integer', minimum: 1, maximum: 5_256_000 },
+        recencyMinutes: { type: 'integer', minimum: 1, maximum: 5_256_000, description: 'Recent-result window. Do not combine with afterDate/beforeDate.' },
         afterDate: { type: 'string', format: 'date' },
         beforeDate: { type: 'string', format: 'date' },
-        domainType: { enum: ['web', 'news', 'research_paper'] },
-        purpose: { type: 'string', maxLength: 2_000 },
+        domainType: { enum: ['web', 'news', 'research_paper'], description: 'Use news for recent events and scores, research_paper for academic evidence, otherwise web.' },
+        purpose: { type: 'string', maxLength: 2_000, description: 'The fact this search should establish for the user.' },
       },
     },
     outputSchema: {

@@ -1,6 +1,10 @@
 import { isMetaModel } from '../keys/types.js';
 import { REGISTERED_TOOLS } from '../tools/registry.js';
 import type { RegisteredTool, ToolRuntimeConfig, ToolSurface } from '../tools/types.js';
+import {
+  deriveWebSearchContextHints,
+  type WebSearchContextHints,
+} from '../tools/search-context.js';
 
 export type ToolsPolicy = 'off' | 'auto' | 'force';
 export type ToolRequestSource = 'api' | 'admin_chat';
@@ -14,6 +18,7 @@ export type ToolRequestContext = {
   effectivePolicy: ToolsPolicy;
   decision: ToolRequestDecision;
   relevanceMatched: boolean;
+  searchHints: WebSearchContextHints;
   eligibleTools: readonly RegisteredTool[];
 };
 
@@ -143,6 +148,11 @@ const RELEVANCE_PHRASES = [
   'tra cuu',
   'tra gia',
   'hom nay',
+  'hom qua',
+  'score',
+  'match result',
+  'ti so',
+  'ket qua tran',
   'dung tool',
   'tim nguon',
   'trich dan nguon',
@@ -204,7 +214,8 @@ export function buildToolRequestContext(input: {
 }): ToolRequestContext {
   const surface = resolveToolSurface(input.model);
   const eligibleTools = projectEligibleTools(input.config, surface);
-  const relevanceMatched = hasToolRelevance(latestUserText(input.messages));
+  const userText = latestUserText(input.messages);
+  const relevanceMatched = hasToolRelevance(userText);
   const decision = decideToolsPolicy({
     runtimeEnabled: input.config.enabled,
     requestHeader: input.requestHeader,
@@ -218,6 +229,7 @@ export function buildToolRequestContext(input: {
     effectivePolicy: decision.kind === 'execute' ? decision.policy : 'off',
     decision,
     relevanceMatched,
+    searchHints: deriveWebSearchContextHints(userText),
     eligibleTools,
   };
 }

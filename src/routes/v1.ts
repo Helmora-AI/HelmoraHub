@@ -52,6 +52,7 @@ import {
 import {
   executeChatToolRuntime,
   requireApiKeyToolRuntimeAccess,
+  withToolPlanningContext,
   withToolSynthesisContext,
 } from '../services/chat-tool-execution.js';
 import { ToolRuntimeCoordinatorError } from '../services/tool-runtime-coordinator.js';
@@ -357,7 +358,10 @@ v1Router.post('/chat/completions', async (req, res, next) => {
     delete (chatReq as { images?: unknown }).images;
 
     const rtkOn = isRtkEnabledForMode(ctx.mode);
-    const { body: compressedReq, stats: rtkStats } = applyRtk(chatReq, rtkOn);
+    const planningReq = toolContext.decision.kind === 'execute'
+      ? withToolPlanningContext(chatReq)
+      : chatReq;
+    const { body: compressedReq, stats: rtkStats } = applyRtk(planningReq, rtkOn);
 
     const opts = {
       mode: ctx.mode,

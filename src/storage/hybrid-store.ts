@@ -52,6 +52,7 @@ import type {
   ToolRunCreate,
   ToolRunListOptions,
   ToolRunRecord,
+  ToolRunPatch,
 } from './types.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import type {
@@ -762,6 +763,10 @@ export class HybridConfigStore implements ConfigStore {
 
   async recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord> {
     return this.workspace.recordToolRun(input);
+  }
+
+  async updateToolRun(id: string, patch: ToolRunPatch): Promise<ToolRunRecord | null> {
+    return this.workspace.updateToolRun(id, patch);
   }
 
   async listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]> {

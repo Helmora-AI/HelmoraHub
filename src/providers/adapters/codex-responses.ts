@@ -307,6 +307,7 @@ export async function callCodexResponses(
         model,
         input,
         ...(toolRound ? { tools: toResponsesTools(toolRound.definitions) } : {}),
+        ...(toolRound?.required ? { tool_choice: 'required' } : {}),
         ...(instructions ? { instructions } : {}),
         store: false,
         stream: false,

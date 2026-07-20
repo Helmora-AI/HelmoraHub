@@ -41,6 +41,8 @@ import {
 } from '../services/tool-request-policy.js';
 import {
   executeChatToolRuntime,
+  type ToolRuntimeActivity,
+  withToolPlanningContext,
   withToolSynthesisContext,
 } from '../services/chat-tool-execution.js';
 import { ToolRuntimeCoordinatorError } from '../services/tool-runtime-coordinator.js';
@@ -451,7 +453,10 @@ chatRouter.post('/completions', async (req, res, next) => {
     }
 
     const rtkOn = isRtkEnabledForMode(ctx.mode);
-    const { body: compressedReq } = applyRtk(chatReq, rtkOn);
+    const planningReq = toolContext.decision.kind === 'execute'
+      ? withToolPlanningContext(chatReq)
+      : chatReq;
+    const { body: compressedReq } = applyRtk(planningReq, rtkOn);
 
     const opts = {
       mode: ctx.mode,
@@ -468,7 +473,10 @@ chatRouter.post('/completions', async (req, res, next) => {
     );
 
     let plannerCatalogId: string | null = null;
-    const runToolCompletion = async (signal: AbortSignal) => {
+    const runToolCompletion = async (
+      signal: AbortSignal,
+      onToolActivity?: (activity: ToolRuntimeActivity) => void | Promise<void>,
+    ) => {
       const outcome = await executeChatToolRuntime({
         requestId,
         store: getConfigStore(),
@@ -480,6 +488,7 @@ chatRouter.post('/completions', async (req, res, next) => {
             : null),
         plannerCatalogId: () => plannerCatalogId,
         signal,
+        onToolActivity,
         modelRound: async ({ pinned, toolRound, signal: roundSignal }) => {
         if (toolOrchestrator?.configured) {
           if (toolOrchestrator.attempts.length === 0) {
@@ -723,8 +732,31 @@ chatRouter.post('/completions', async (req, res, next) => {
         if (!res.writableFinished) toolAbort.abort();
       };
       res.on('close', onToolClientGone);
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      res.write(`event: metadata\ndata: ${JSON.stringify({
+        requestId,
+        thinkingRequested: ctx.thinkingRequested,
+        thinkingApplied: ctx.thinkingApplied,
+      })}\n\n`);
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write(': helmora-heartbeat\n\n');
+      }, 10_000);
+      heartbeat.unref();
       try {
-        const outcome = await runToolCompletion(toolAbort.signal);
+        const outcome = await runToolCompletion(toolAbort.signal, (activity) => {
+          if (res.writableEnded) return;
+          res.write(`event: tool_activity\ndata: ${JSON.stringify({
+            toolId: activity.toolId,
+            status: activity.status,
+            sourceCount: activity.sourceCount,
+            errorCode: activity.errorCode,
+            durationMs: activity.durationMs,
+          })}\n\n`);
+        });
         if (!outcome) {
           throw new ToolRuntimeCoordinatorError(
             'tool_runtime_unavailable',
@@ -733,13 +765,15 @@ chatRouter.post('/completions', async (req, res, next) => {
         }
         const toolResult = outcome.result;
         if (!toolResult.ok) {
-          res.status(adminChatStatusForUpstreamFailure(toolResult.status)).json(toolResult.body);
+          res.write(`event: error\ndata: ${JSON.stringify(toolResult.body)}\n\n`);
+          res.write('data: [DONE]\n\n');
+          res.end();
           return;
         }
         const selected = ctx.mini && 'selectedAttempt' in toolResult
           ? (toolResult as Awaited<ReturnType<typeof routeMiniChat>>).selectedAttempt
           : null;
-        if (ctx.mini && selected) {
+        if (ctx.mini && selected && !res.headersSent) {
           res.setHeader('X-Helmora-Mini-Role', ctx.mini.classification.role);
           res.setHeader('X-Helmora-Mini-Slot', selected.slot);
         }
@@ -749,24 +783,6 @@ chatRouter.post('/completions', async (req, res, next) => {
         const content = typeof rawContent === 'string'
           ? guardOutputText(rawContent).text
           : '';
-        res.status(200);
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        if (typeof res.flushHeaders === 'function') res.flushHeaders();
-        res.write(`event: metadata\ndata: ${JSON.stringify({
-          requestId,
-          thinkingRequested: ctx.thinkingRequested,
-          thinkingApplied: ctx.thinkingApplied,
-        })}\n\n`);
-        for (const activity of outcome.results) {
-          res.write(`event: tool_activity\ndata: ${JSON.stringify({
-            toolId: activity.toolId,
-            status: activity.isError ? 'failed' : 'completed',
-            sourceCount: activity.sources.length,
-            errorCode: activity.errorCode ?? null,
-          })}\n\n`);
-        }
         if (content) {
           res.write(`data: ${JSON.stringify({
             choices: [{ index: 0, delta: { content }, finish_reason: null }],
@@ -776,14 +792,20 @@ chatRouter.post('/completions', async (req, res, next) => {
         res.end();
         return;
       } catch (error) {
-        if (error instanceof ToolRuntimeCoordinatorError && !res.headersSent) {
-          res.status(error.status).json({
-            error: { type: error.code, message: error.message, requestId },
-          });
-          return;
+        const publicError = error instanceof ToolRuntimeCoordinatorError
+          ? { type: error.code, message: error.message, requestId }
+          : { type: 'internal_error', message: 'An internal error occurred.', requestId };
+        if (!(error instanceof ToolRuntimeCoordinatorError)) {
+          console.error(JSON.stringify({ event: 'tool_stream_failed', requestId }));
         }
-        throw error;
+        if (!res.writableEnded) {
+          res.write(`event: error\ndata: ${JSON.stringify({ error: publicError })}\n\n`);
+          res.write('data: [DONE]\n\n');
+          res.end();
+        }
+        return;
       } finally {
+        clearInterval(heartbeat);
         res.off('close', onToolClientGone);
       }
     }

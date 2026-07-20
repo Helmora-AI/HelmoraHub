@@ -94,6 +94,7 @@ describe('Anthropic and Gemini native tools', () => {
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body.tools[0].name).toBe('web_search');
+      expect(body.tool_choice).toEqual({ type: 'any' });
       return new Response(JSON.stringify({
         id: 'msg_1',
         content: [{ type: 'tool_use', id: 'call_1', name: 'web_search', input: { query: 'today' } }],
@@ -104,7 +105,7 @@ describe('Anthropic and Gemini native tools', () => {
     vi.stubGlobal('fetch', fetchMock);
     const result = await callAnthropicCompatible(provider('anthropic'), {
       messages: [{ role: 'user', content: 'search today' }],
-      toolRound: { definitions: [REGISTERED_TOOLS[0]!], round: 0 },
+      toolRound: { definitions: [REGISTERED_TOOLS[0]!], round: 0, required: true },
     });
     expect(result.ok).toBe(true);
     expect(result.body).toMatchObject({
@@ -116,6 +117,7 @@ describe('Anthropic and Gemini native tools', () => {
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body.tools[0].functionDeclarations[0].name).toBe('web_search');
+      expect(body.toolConfig).toEqual({ functionCallingConfig: { mode: 'ANY' } });
       return new Response(JSON.stringify({
         candidates: [{ content: { parts: [{ functionCall: { name: 'web_search', args: { query: 'today' } } }] } }],
       }));
@@ -123,7 +125,7 @@ describe('Anthropic and Gemini native tools', () => {
     vi.stubGlobal('fetch', fetchMock);
     const result = await callGeminiCompatible(provider('gemini'), {
       messages: [{ role: 'user', content: 'search today' }],
-      toolRound: { definitions: [REGISTERED_TOOLS[0]!], round: 3 },
+      toolRound: { definitions: [REGISTERED_TOOLS[0]!], round: 3, required: true },
     });
     expect(result.ok).toBe(true);
     expect(result.body).toMatchObject({

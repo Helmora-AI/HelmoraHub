@@ -1,6 +1,7 @@
 import type {
   ToolRunCreate,
   ToolRunRecord,
+  ToolRunPatch,
   ToolRunSource,
   ToolRunStatus,
 } from './types.js';
@@ -110,4 +111,14 @@ export function toolRunToRow(record: ToolRunRecord): Record<string, unknown> {
     error_code: record.errorCode,
     created_at: record.createdAt,
   };
+}
+
+export function updateToolRunRecord(
+  existing: ToolRunRecord,
+  patch: ToolRunPatch,
+): ToolRunRecord {
+  return createToolRunRecord({
+    ...existing,
+    ...patch,
+  }, existing.id, existing.createdAt);
 }

@@ -45,6 +45,10 @@ export type ToolRunRecord = {
 };
 
 export type ToolRunCreate = Omit<ToolRunRecord, 'id' | 'createdAt'> & { id?: string };
+export type ToolRunPatch = Pick<
+  ToolRunRecord,
+  'status' | 'durationMs' | 'sourceCount' | 'errorCode'
+>;
 export type ToolRunListOptions = {
   limit?: number;
   before?: { createdAt: number; id: string };
@@ -145,6 +149,7 @@ export interface ConfigStore extends ChatStoreMethods {
   recordUsage(event: UsageEventCreate): Promise<UsageEvent>;
   listUsage(opts?: { apiKeyId?: string; limit?: number }): Promise<UsageEvent[]>;
   recordToolRun(input: ToolRunCreate): Promise<ToolRunRecord>;
+  updateToolRun(id: string, patch: ToolRunPatch): Promise<ToolRunRecord | null>;
   listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]>;
 
   getPricingOverrides(): Promise<Record<string, ModelPricing>>;

@@ -59,6 +59,8 @@ export type ToolSource = {
   title: string | null;
   url: string;
   snippet: string | null;
+  publishedAt?: string | null;
+  publisher?: string | null;
 };
 
 export type NormalizedToolResult = {

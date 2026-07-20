@@ -111,9 +111,89 @@ describe('SQLite tool-run audit', () => {
       errorCode: 'run_interrupted',
     });
   });
+
+  it('updates one running audit row in place when execution completes', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'helmora-tool-lifecycle-'));
+    directories.push(directory);
+    const config = baseConfig({ dataDir: directory, dbPath: path.join(directory, 'helmora.db') });
+    const store = new SqliteConfigStore(config);
+    stores.push(store);
+
+    const running = await store.recordToolRun({
+      ...auditInput(),
+      status: 'running',
+      durationMs: null,
+      sourceCount: null,
+    });
+    const completed = await store.updateToolRun(running.id, {
+      status: 'completed',
+      durationMs: 84,
+      sourceCount: 2,
+      errorCode: null,
+    });
+
+    expect(completed).toEqual({
+      ...running,
+      status: 'completed',
+      durationMs: 84,
+      sourceCount: 2,
+    });
+    expect(await store.listToolRuns({ limit: 10 })).toEqual([completed]);
+  });
 });
 
 describe('Supabase tool-run audit', () => {
+  it('updates a live Supabase audit row without creating a duplicate', async () => {
+    const store = new SupabaseConfigStore(baseConfig({
+      storageBackend: 'supabase',
+      storageChoice: 'sql',
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseServiceRoleKey: 'service-role-test-only',
+    }));
+    const rows: Record<string, unknown>[] = [];
+    const client = {
+      from: () => {
+        const query = {
+          order: () => query,
+          or: () => query,
+          limit: async (limit: number) => ({ data: rows.slice(0, limit), error: null }),
+        };
+        return {
+          insert: async (row: Record<string, unknown>) => {
+            rows.push(row);
+            return { error: null };
+          },
+          update: (patch: Record<string, unknown>) => ({
+            eq: async (_field: string, id: string) => {
+              const row = rows.find((candidate) => candidate.id === id);
+              if (row) Object.assign(row, patch);
+              return { error: null };
+            },
+          }),
+          select: () => query,
+        };
+      },
+    };
+    (store as unknown as { client: typeof client }).client = client;
+
+    const running = await store.recordToolRun({
+      ...auditInput(),
+      status: 'running',
+      durationMs: null,
+      sourceCount: null,
+    });
+    const completed = await store.updateToolRun(running.id, {
+      status: 'completed',
+      durationMs: 25,
+      sourceCount: 1,
+      errorCode: null,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(completed).toMatchObject({ status: 'completed', durationMs: 25, sourceCount: 1 });
+    expect(await store.listToolRuns({ limit: 10 })).toEqual([completed]);
+  });
+
   it('writes allowlisted columns to the dedicated table and returns bounded activity', async () => {
     const store = new SupabaseConfigStore(baseConfig({
       storageBackend: 'supabase',

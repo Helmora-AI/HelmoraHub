@@ -103,6 +103,7 @@ describe('tool request policy', () => {
     expect(hasToolRelevance('Tìm nguồn mới nhất về chính sách này.')).toBe(true);
     expect(hasToolRelevance('Tim nguon moi nhat ve chinh sach nay.')).toBe(true);
     expect(hasToolRelevance('Read https://example.com/report for me.')).toBe(true);
+    expect(hasToolRelevance('Ti so tran chung ket World Cup 2026 hom qua la bao nhieu?')).toBe(true);
     expect(hasToolRelevance('Tra giá vàng hôm nay')).toBe(true);
     expect(hasToolRelevance('Hãy dùng tools để tra giá vàng hôm nay')).toBe(true);
     expect(hasToolRelevance('Xin chào, bạn khỏe không?')).toBe(false);

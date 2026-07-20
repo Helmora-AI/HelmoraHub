@@ -4,6 +4,10 @@ import {
   tinyFishSearch,
   validateWebSearchInput,
 } from '../tools/connectors/tinyfish-search.js';
+import {
+  applyWebSearchContextDefaults,
+  deriveWebSearchContextHints,
+} from '../tools/search-context.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -13,6 +17,29 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('TinyFish Search connector', () => {
+  it('adds Vietnamese locale and recent-news defaults without overriding explicit filters', () => {
+    expect(applyWebSearchContextDefaults(
+      { query: 'ti so chung ket World Cup 2026' },
+      deriveWebSearchContextHints('Ti so tran chung ket World Cup 2026 hom qua la bao nhieu?'),
+    )).toEqual({
+      query: 'ti so chung ket World Cup 2026',
+      location: 'VN',
+      language: 'vi',
+      recencyMinutes: 4_320,
+      domainType: 'news',
+      purpose: 'Find recent authoritative sources that directly verify this time-sensitive fact.',
+    });
+    expect(applyWebSearchContextDefaults(
+      { query: 'gia xang', location: 'SG', language: 'en', afterDate: '2026-07-19' },
+      deriveWebSearchContextHints('Gia xang hom nay'),
+    )).toEqual({
+      query: 'gia xang',
+      location: 'SG',
+      language: 'en',
+      afterDate: '2026-07-19',
+      purpose: 'Find recent authoritative sources that directly verify this time-sensitive fact.',
+    });
+  });
   it('accepts the published TinyFish recency and purpose bounds', () => {
     expect(validateWebSearchInput({
       query: 'release history',
@@ -36,6 +63,8 @@ describe('TinyFish Search connector', () => {
         title: 'TypeScript',
         snippet: 'Typed JavaScript at any scale.',
         url: 'https://www.typescriptlang.org/',
+        date: '2026-07-19',
+        publisher: 'TypeScript Team',
       }],
     }));
 
@@ -76,7 +105,11 @@ describe('TinyFish Search connector', () => {
       title: 'TypeScript',
       url: 'https://www.typescriptlang.org/',
       snippet: 'Typed JavaScript at any scale.',
+      publishedAt: '2026-07-19',
+      publisher: 'TypeScript Team',
     }]);
+    expect(result.content).toContain('Published: 2026-07-19');
+    expect(result.content).toContain('Publisher: TypeScript Team');
     expect(JSON.stringify(result)).not.toContain('tf-secret-key');
   });
 
@@ -92,6 +125,11 @@ describe('TinyFish Search connector', () => {
     );
     expect(() => validateWebSearchInput({ query: 'ok', page: 11 })).toThrow();
     expect(() => validateWebSearchInput({ query: 'ok', afterDate: '2026-13-40' })).toThrow();
+    expect(() => validateWebSearchInput({
+      query: 'paper',
+      domainType: 'research_paper',
+      recencyMinutes: 60,
+    })).toThrowError(expect.objectContaining({ code: 'conflicting_freshness_filters' }));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

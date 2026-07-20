@@ -46,8 +46,14 @@ import type {
   ToolRunCreate,
   ToolRunListOptions,
   ToolRunRecord,
+  ToolRunPatch,
 } from './types.js';
-import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
+import {
+  createToolRunRecord,
+  toolRunFromRow,
+  toolRunToRow,
+  updateToolRunRecord,
+} from './tool-runs.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   CHAT_ACTIVE_SETTING_KEY,
@@ -157,6 +163,7 @@ export class SupabaseConfigStore implements ConfigStore {
   private client: SupabaseClient;
   private encryptionKey: string;
   private readonly liveToolRunIds = new Set<string>();
+  private readonly liveToolRuns = new Map<string, ToolRunRecord>();
 
   constructor(config: Config) {
     if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
@@ -973,8 +980,33 @@ export class SupabaseConfigStore implements ConfigStore {
     const record = createToolRunRecord(input, randomId('toolrun'), Date.now());
     const { error } = await this.client.from(HEL_TABLE.toolRuns).insert(toolRunToRow(record));
     if (error) throw formatSupabaseControlError('recordToolRun', error.message);
-    if (record.status === 'running') this.liveToolRunIds.add(record.id);
+    if (record.status === 'running') {
+      this.liveToolRunIds.add(record.id);
+      this.liveToolRuns.set(record.id, record);
+    }
     return record;
+  }
+
+  async updateToolRun(id: string, patch: ToolRunPatch): Promise<ToolRunRecord | null> {
+    const existing = this.liveToolRuns.get(id);
+    if (!existing) return null;
+    const updated = updateToolRunRecord(existing, patch);
+    const row = toolRunToRow(updated);
+    const { error } = await this.client.from(HEL_TABLE.toolRuns).update({
+      status: row.status,
+      duration_ms: row.duration_ms,
+      source_count: row.source_count,
+      error_code: row.error_code,
+    }).eq('id', id);
+    if (error) throw formatSupabaseControlError('updateToolRun', error.message);
+    if (updated.status === 'running') {
+      this.liveToolRunIds.add(id);
+      this.liveToolRuns.set(id, updated);
+    } else {
+      this.liveToolRunIds.delete(id);
+      this.liveToolRuns.delete(id);
+    }
+    return updated;
   }
 
   async listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]> {

@@ -14,6 +14,8 @@ export type NativeToolCapability = {
 
 export type ProviderToolRound = {
   definitions: readonly RegisteredTool[];
+  /** Require at least one tool call in this provider round. */
+  required?: boolean;
   round?: number;
   calls?: readonly ProposedToolCall[];
   results?: readonly ModelToolResult[];

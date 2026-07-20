@@ -4,7 +4,7 @@ import {
   ToolRuntimeCoordinatorError,
   runToolRuntimeCoordinator,
 } from '../services/tool-runtime-coordinator.js';
-import { withToolSynthesisContext } from '../services/chat-tool-execution.js';
+import { withToolPlanningContext, withToolSynthesisContext } from '../services/chat-tool-execution.js';
 
 function completion(content: string, providerId = 'planner', model = 'planner-model') {
   return {
@@ -19,6 +19,16 @@ function completion(content: string, providerId = 'planner', model = 'planner-mo
 }
 
 describe('tool runtime coordinator', () => {
+  it('adds a trusted current-date planning instruction for time-sensitive tool decisions', () => {
+    const request = withToolPlanningContext({
+      messages: [{ role: 'user', content: 'What happened yesterday?' }],
+      model: 'planner',
+    }, new Date('2026-07-20T00:00:00.000Z'));
+    expect(request.messages.at(-1)).toEqual(expect.objectContaining({
+      role: 'system',
+      content: expect.stringContaining('Current date: 2026-07-20'),
+    }));
+  });
   it('builds a normal answer-model request from bounded untrusted tool context', () => {
     const request = withToolSynthesisContext({
       model: 'answer-model',
@@ -74,9 +84,13 @@ describe('tool runtime coordinator', () => {
     expect(outcome.pinned).toEqual({ providerId: 'planner', model: 'planner-model' });
     expect(outcome.totalCalls).toBe(1);
     expect(execute).toHaveBeenCalledOnce();
+    expect(modelRound).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      toolRound: expect.objectContaining({ required: true }),
+    }));
     expect(modelRound).toHaveBeenNthCalledWith(2, expect.objectContaining({
       pinned: { providerId: 'planner', model: 'planner-model' },
       toolRound: expect.objectContaining({
+        required: false,
         calls: [expect.objectContaining({ id: 'call_1', toolId: 'web_search' })],
         results: [expect.objectContaining({ callId: 'call_1', isError: false })],
       }),

@@ -24,6 +24,8 @@ function sanitizeSources(sources: ToolSource[]): ToolSource[] {
       title: boundedText(source.title, 200).value,
       url: redactSensitiveUrlForModel(url),
       snippet: boundedText(source.snippet, 500).value,
+      publishedAt: boundedText(source.publishedAt, 100).value,
+      publisher: boundedText(source.publisher, 200).value,
     }];
   });
 }

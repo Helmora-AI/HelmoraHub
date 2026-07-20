@@ -211,6 +211,9 @@ export async function callGeminiCompatible(
       body: JSON.stringify({
         contents,
         ...(request.toolRound ? { tools: toGeminiTools(request.toolRound.definitions) } : {}),
+        ...(request.toolRound?.required
+          ? { toolConfig: { functionCallingConfig: { mode: 'ANY' } } }
+          : {}),
         ...(systemInstruction ? { systemInstruction } : {}),
         generationConfig: {
           ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),

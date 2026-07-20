@@ -99,6 +99,12 @@ export function validateWebSearchInput(value: unknown): WebSearchInput {
   if (domainType !== undefined && !['web', 'news', 'research_paper'].includes(String(domainType))) {
     invalid('tool_invalid_arguments', 'domainType is invalid.');
   }
+  if (domainType === 'research_paper' && (recencyMinutes !== undefined || afterDate || beforeDate)) {
+    invalid(
+      'conflicting_freshness_filters',
+      'Freshness filters cannot be combined with research_paper.',
+    );
+  }
 
   return {
     query,
@@ -157,12 +163,22 @@ function normalizeSearchResponse(payload: unknown): NormalizedToolResult {
     }
     const title = boundedText(row.title, 500);
     const snippet = boundedText(row.snippet, 2_000);
-    truncated ||= title.truncated || snippet.truncated;
-    sources.push({ title: title.value, url, snippet: snippet.value });
+    const publishedAt = boundedText(row.date, 100);
+    const publisher = boundedText(row.publisher, 200);
+    truncated ||= title.truncated || snippet.truncated || publishedAt.truncated || publisher.truncated;
+    sources.push({
+      title: title.value,
+      url,
+      snippet: snippet.value,
+      publishedAt: publishedAt.value,
+      publisher: publisher.value,
+    });
   }
   const lines = sources.map((source, index) => [
     `${index + 1}. ${source.title ?? new URL(source.url).hostname}`,
     source.url,
+    source.publishedAt ? `Published: ${source.publishedAt}` : '',
+    source.publisher ? `Publisher: ${source.publisher}` : '',
     source.snippet ?? '',
   ].filter(Boolean).join('\n'));
   const fullContent = lines.join('\n\n');

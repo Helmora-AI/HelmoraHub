@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { AddressInfo } from 'node:net';
 import request, { TEST_SETUP_TOKEN } from './test-request.js';
 import { loadConfig, setActiveConfig } from '../lib/config.js';
 import { initStorage, closeStorage, getConfigStore } from '../storage/index.js';
@@ -306,12 +307,17 @@ describe('POST /api/chat/completions', () => {
       const url = new URL(String(input));
       if (url.hostname === 'api.search.tinyfish.ai') {
         expect(url.searchParams.get('query')).toBe('giá vàng hôm nay');
+        expect(url.searchParams.get('location')).toBe('VN');
+        expect(url.searchParams.get('language')).toBe('vi');
+        expect(url.searchParams.get('recency_minutes')).toBe('4320');
         return new Response(JSON.stringify({
           query: 'giá vàng hôm nay',
           results: [{
             title: 'Giá vàng',
             snippet: 'Giá vàng cập nhật hôm nay',
             url: 'https://example.com/gold',
+            date: '2026-07-20',
+            publisher: 'Nguồn chính thức',
           }],
         }));
       }
@@ -342,6 +348,8 @@ describe('POST /api/chat/completions', () => {
           usage: { prompt_tokens: 8, completion_tokens: 3 },
         }));
       }
+      expect(JSON.stringify(upstream.messages)).toContain('Published: 2026-07-20');
+      expect(JSON.stringify(upstream.messages)).toContain('Publisher: Nguồn chính thức');
       return new Response(JSON.stringify({
         choices: [{
           message: { role: 'assistant', content: 'Giá vàng hôm nay đã được tra cứu.' },
@@ -365,7 +373,9 @@ describe('POST /api/chat/completions', () => {
     expect(res.status).toBe(200);
     expect(res.body.choices[0].message.content).toContain('đã được tra cứu');
     expect(modelRounds).toBe(2);
-    expect(await getConfigStore().listToolRuns({ limit: 10 })).toContainEqual(
+    const toolRuns = await getConfigStore().listToolRuns({ limit: 10 });
+    expect(toolRuns).toHaveLength(1);
+    expect(toolRuns).toContainEqual(
       expect.objectContaining({
         requestId: expect.stringMatching(/^req_/),
         source: 'runtime',
@@ -486,10 +496,76 @@ describe('POST /api/chat/completions', () => {
       : Buffer.isBuffer(res.body) ? res.body.toString('utf8') : String(res.body ?? '');
     expect(responseText).toContain('event: tool_activity');
     expect(responseText).toContain('"toolId":"web_search"');
+    expect(responseText).toContain('"status":"running"');
+    expect(responseText).toContain('"status":"completed"');
+    expect(responseText.indexOf('event: metadata')).toBeLessThan(
+      responseText.indexOf('"status":"running"'),
+    );
     expect(responseText).toContain('Kết quả SSE từ TinyFish.');
     expect(responseText).toContain('[DONE]');
     expect(responseText).not.toContain('giá vàng hôm nay');
     expect(modelRounds).toBe(2);
+  });
+
+  it('flushes Playground SSE metadata before a slow tool request completes', async () => {
+    const nativeFetch = globalThis.fetch;
+    let releaseSearch!: () => void;
+    const searchGate = new Promise<void>((resolve) => { releaseSearch = resolve; });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.search.tinyfish.ai') {
+        await searchGate;
+        return new Response(JSON.stringify({
+          query: 'current score',
+          results: [{ title: 'Score', snippet: 'Final', url: 'https://example.com/score' }],
+        }));
+      }
+      const upstream = JSON.parse(String(init?.body)) as { messages: Array<{ role: string }> };
+      return new Response(JSON.stringify(upstream.messages.some((message) => message.role === 'tool')
+        ? { choices: [{ message: { role: 'assistant', content: 'Final score.' } }] }
+        : { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+            id: 'call_slow_search',
+            type: 'function',
+            function: { name: 'web_search', arguments: '{"query":"current score"}' },
+          }] } }] }));
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const responsePromise = nativeFetch(`http://127.0.0.1:${port}/api/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${spaToken}`,
+          'Content-Type': 'application/json',
+          'X-Helmora-Tools': 'force',
+        },
+        body: JSON.stringify({
+          model: 'auto',
+          messages: [{ role: 'user', content: 'What was the current score?' }],
+          stream: true,
+        }),
+      });
+      const early = await Promise.race([
+        responsePromise,
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 750)),
+      ]);
+      expect(early).not.toBe('timeout');
+      const response = early as Response;
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('event: metadata');
+      releaseSearch();
+      while (!(await reader.read()).done) { /* drain */ }
+    } finally {
+      releaseSearch();
+      fetchMock.mockRestore();
+      await new Promise<void>((resolve, reject) => server.close((error) => (
+        error ? reject(error) : resolve()
+      )));
+    }
   });
 
   it('uses the same TinyFish runtime contract on /v1 without exposing tool arguments', async () => {

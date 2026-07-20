@@ -254,6 +254,7 @@ export async function callAnthropicCompatible(
         max_tokens: maxTokens,
         messages,
         ...(request.toolRound ? { tools: toAnthropicTools(request.toolRound.definitions) } : {}),
+        ...(request.toolRound?.required ? { tool_choice: { type: 'any' } } : {}),
         ...(system ? { system } : {}),
         ...(typeof request.temperature === 'number' ? { temperature: request.temperature } : {}),
         stream: false,

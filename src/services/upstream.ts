@@ -87,6 +87,7 @@ function openAIChatRequestBody(
     ...upstreamRequest,
     messages,
     ...(toolRound ? { tools: toOpenAIChatTools(toolRound.definitions) } : {}),
+    ...(toolRound?.required ? { tool_choice: 'required' } : {}),
     model,
     stream,
   };

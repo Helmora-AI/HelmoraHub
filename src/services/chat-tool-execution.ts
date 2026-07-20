@@ -1,5 +1,6 @@
 import type { ConfigStore } from '../storage/types.js';
 import { TinyFishConnectorError } from '../tools/connectors/tinyfish-client.js';
+import { applyWebSearchContextDefaults } from '../tools/search-context.js';
 import type { ToolRuntimeConfig } from '../tools/types.js';
 import { getToolRuntimeConfig } from './tool-config.js';
 import { getTinyFishToolExecutor } from './tool-executor-manager.js';
@@ -38,6 +39,38 @@ export function withToolSynthesisContext<T extends Record<string, unknown>>(
   };
 }
 
+export function withToolPlanningContext<T extends Record<string, unknown>>(
+  request: T,
+  now = new Date(),
+): Omit<T, 'messages'> & { messages: Array<{ role: string; content: unknown }> } {
+  const { messages: rawMessages, ...rest } = request;
+  const messages = Array.isArray(rawMessages)
+    ? rawMessages.map((message) => structuredClone(message))
+    : [];
+  return {
+    ...rest,
+    messages: [
+      ...messages,
+      {
+        role: 'system',
+        content: [
+          `Current date: ${now.toISOString().slice(0, 10)}.`,
+          'For time-sensitive facts, prices, scores, news, or claims about today/yesterday, use web_search instead of relying on model memory.',
+          'Set an appropriate two-letter location, result language, and freshness filter. Prefer recent authoritative or primary sources and preserve source dates in the answer.',
+        ].join(' '),
+      },
+    ],
+  } as Omit<T, 'messages'> & { messages: Array<{ role: string; content: unknown }> };
+}
+
+export type ToolRuntimeActivity = {
+  toolId: 'web_search' | 'web_fetch';
+  status: 'running' | 'completed' | 'failed';
+  sourceCount: number | null;
+  errorCode: string | null;
+  durationMs: number | null;
+};
+
 export async function requireApiKeyToolRuntimeAccess(
   store: Pick<ConfigStore, 'getApiKeyById'>,
   apiKeyId: string,
@@ -72,6 +105,7 @@ export async function executeChatToolRuntime<T extends ToolModelResult>(input: {
   plannerCatalogId?: string | null | (() => string | null);
   modelRound: Parameters<typeof runToolRuntimeCoordinator<T>>[0]['modelRound'];
   onModelRound?: Parameters<typeof runToolRuntimeCoordinator<T>>[0]['onModelRound'];
+  onToolActivity?: (activity: ToolRuntimeActivity) => void | Promise<void>;
   reauthorize?: Parameters<typeof runToolRuntimeCoordinator<T>>[0]['reauthorize'];
   signal?: AbortSignal;
 }) {
@@ -95,6 +129,19 @@ export async function executeChatToolRuntime<T extends ToolModelResult>(input: {
     throw error;
   }
 
+  const emitToolActivity = async (activity: Parameters<NonNullable<typeof input.onToolActivity>>[0]) => {
+    try {
+      await input.onToolActivity?.(activity);
+    } catch {
+      console.error(JSON.stringify({
+        event: 'tool_activity_emit_failed',
+        requestId: input.requestId,
+        toolId: activity.toolId,
+        status: activity.status,
+      }));
+    }
+  };
+
   return runToolRuntimeCoordinator<T>({
     eligibleTools: input.context.eligibleTools,
     requireToolCall: input.context.decision.policy === 'force',
@@ -112,44 +159,98 @@ export async function executeChatToolRuntime<T extends ToolModelResult>(input: {
     },
     execute: async ({ call, signal }) => {
       const startedAt = Date.now();
+      const auditBase = {
+        requestId: input.requestId,
+        toolId: call.toolId,
+        connector: 'tinyfish' as const,
+        surface: input.context.surface,
+        source: 'runtime' as const,
+        answerCatalogId: input.answerCatalogId ?? null,
+        plannerCatalogId: typeof input.plannerCatalogId === 'function'
+          ? input.plannerCatalogId()
+          : input.plannerCatalogId ?? null,
+        risk: 'read' as const,
+      };
+      let auditId: string | null = null;
       try {
-        const execution = await executor.execute(call.toolId, call.arguments, { signal });
-        await input.store.recordToolRun({
+        const running = await input.store.recordToolRun({
+          ...auditBase,
+          status: 'running',
+          durationMs: null,
+          sourceCount: null,
+          errorCode: null,
+        });
+        auditId = running.id;
+      } catch {
+        console.error(JSON.stringify({
+          event: 'tool_audit_write_failed',
           requestId: input.requestId,
           toolId: call.toolId,
-          connector: 'tinyfish',
-          surface: input.context.surface,
-          source: 'runtime',
-          answerCatalogId: input.answerCatalogId ?? null,
-          plannerCatalogId: typeof input.plannerCatalogId === 'function'
-            ? input.plannerCatalogId()
-            : input.plannerCatalogId ?? null,
-          risk: 'read',
+          phase: 'running',
+        }));
+      }
+      await emitToolActivity({
+        toolId: call.toolId,
+        status: 'running',
+        sourceCount: null,
+        errorCode: null,
+        durationMs: null,
+      });
+      try {
+        const callArguments = call.toolId === 'web_search'
+          ? applyWebSearchContextDefaults(call.arguments, input.context.searchHints)
+          : call.arguments;
+        const execution = await executor.execute(call.toolId, callArguments, { signal });
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        try {
+          if (auditId) await input.store.updateToolRun(auditId, {
+            status: 'completed',
+            durationMs,
+            sourceCount: execution.result.sources.length,
+            errorCode: null,
+          });
+        } catch {
+          console.error(JSON.stringify({
+            event: 'tool_audit_write_failed',
+            requestId: input.requestId,
+            toolId: call.toolId,
+            phase: 'completed',
+          }));
+        }
+        await emitToolActivity({
+          toolId: call.toolId,
           status: 'completed',
-          durationMs: Math.max(0, Date.now() - startedAt),
           sourceCount: execution.result.sources.length,
           errorCode: null,
+          durationMs,
         });
         return execution.result;
       } catch (error) {
         const code = error instanceof TinyFishConnectorError
           ? error.code
           : 'tool_execution_failed';
-        await input.store.recordToolRun({
-          requestId: input.requestId,
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        try {
+          if (auditId) await input.store.updateToolRun(auditId, {
+            status: 'failed',
+            durationMs,
+            sourceCount: null,
+            errorCode: code,
+          });
+        } catch {
+          console.error(JSON.stringify({
+            event: 'tool_audit_write_failed',
+            requestId: input.requestId,
+            toolId: call.toolId,
+            phase: 'failed',
+          }));
+        }
+        await emitToolActivity({
           toolId: call.toolId,
-          connector: 'tinyfish',
-          surface: input.context.surface,
-          source: 'runtime',
-          answerCatalogId: input.answerCatalogId ?? null,
-          plannerCatalogId: typeof input.plannerCatalogId === 'function'
-            ? input.plannerCatalogId()
-            : input.plannerCatalogId ?? null,
-          risk: 'read',
           status: 'failed',
-          durationMs: Math.max(0, Date.now() - startedAt),
           sourceCount: null,
           errorCode: code,
+          durationMs,
         });
         throw error;
       }

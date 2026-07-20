@@ -50,8 +50,14 @@ import type {
   ToolRunCreate,
   ToolRunListOptions,
   ToolRunRecord,
+  ToolRunPatch,
 } from './types.js';
-import { createToolRunRecord, toolRunFromRow, toolRunToRow } from './tool-runs.js';
+import {
+  createToolRunRecord,
+  toolRunFromRow,
+  toolRunToRow,
+  updateToolRunRecord,
+} from './tool-runs.js';
 import type { RegisteredConnectorId } from '../tools/types.js';
 import {
   createHubModelSync,
@@ -1257,6 +1263,23 @@ export class SqliteConfigStore implements ConfigStore {
     ).run(row);
     if (record.status === 'running') this.liveToolRunIds.add(record.id);
     return record;
+  }
+
+  async updateToolRun(id: string, patch: ToolRunPatch): Promise<ToolRunRecord | null> {
+    const row = this.db.prepare('SELECT * FROM tool_runs WHERE id = ?').get(id) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    const updated = updateToolRunRecord(toolRunFromRow(row, { preserveRunning: true }), patch);
+    this.db.prepare(
+      `UPDATE tool_runs
+       SET status = @status, duration_ms = @duration_ms,
+           source_count = @source_count, error_code = @error_code
+       WHERE id = @id`
+    ).run(toolRunToRow(updated));
+    if (updated.status === 'running') this.liveToolRunIds.add(updated.id);
+    else this.liveToolRunIds.delete(updated.id);
+    return updated;
   }
 
   async listToolRuns(opts?: ToolRunListOptions): Promise<ToolRunRecord[]> {

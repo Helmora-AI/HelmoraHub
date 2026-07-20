@@ -318,6 +318,24 @@ describe('P2 adapters', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('maps a required first tool round to OpenAI Chat tool_choice', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tool_choice).toBe('required');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ choices: [{ message: { tool_calls: [] } }] }),
+      };
+    }));
+
+    const result = await callOpenAICompatible(provider(), {
+      messages: [{ role: 'user', content: 'search it' }],
+      toolRound: { definitions: [REGISTERED_TOOLS[0]], required: true },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('uses flat OpenAI Responses definitions and preserves call_id in results', () => {
     expect(toResponsesTools([REGISTERED_TOOLS[0]])).toEqual([
       {
@@ -413,5 +431,29 @@ describe('P2 adapters', () => {
         finish_reason: 'tool_calls',
       }],
     });
+  });
+
+  it('maps a required first tool round to Responses tool_choice', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tool_choice).toBe('required');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 'resp_required', output: [] }),
+      };
+    }));
+
+    const result = await callCodexResponses(provider({
+      id: 'codex',
+      baseUrl: 'https://chatgpt.test/backend-api/codex/responses',
+      protocol: 'oauth',
+      authStyle: 'oauth',
+      authMode: 'oauth',
+    }), {
+      messages: [{ role: 'user', content: 'search it' }],
+      toolRound: { definitions: REGISTERED_TOOLS, required: true },
+    });
+    expect(result.ok).toBe(true);
   });
 });
