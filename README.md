@@ -198,4 +198,6 @@ audit. Unit tests set `NODE_ENV=test` and do not read the developer's `.env`.
 
 ## License
 
-Private / Helmora-AI — see repository settings for access.
+Licensed under the [Apache License 2.0](LICENSE).
+
+Copyright © 2026 pr0w4.dev.
